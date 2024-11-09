@@ -61,7 +61,7 @@ search_conditions = {
     "Роль": {"column": "job_position_name", "join": False},
     "Отдел": {"column": "direction", "join": False},
     "Телеграм": {"column": "telegram", "join": False},
-    "Проект": {"column": "project", "join": True}
+    "Проект": {"column": "project", "join": True} #true переводит нажатие кнопки в скрипт для поиска по привязанным таблицам через JOIN запрос
 }
 
 # обработка взаимодействия с кнопками
@@ -110,7 +110,6 @@ async def button(update: Update, context: CallbackContext):
 
         # Переходим к выбору параметра для поиска, обновляя галочку на кнопке
         await show_search_menu(update, context)  # Обновляем меню с галочкой
-
 
 # команда старт
 async def start(update: Update, context: CallbackContext):
@@ -191,10 +190,9 @@ async def edit_search_info(update: Update, context: CallbackContext):
 
     # Отправляем обновленное сообщение с клавиатурой
     await update.callback_query.edit_message_text(
-        "Выберите, какую информацию показывать в результатах поиска:",
+        "Выберите, какую информацию показывать в результатах поиска и нажмите Сохранить:",
         reply_markup=reply_markup
     )
-
 
 # выбор локального поиска, например по ФИО, тг или проекту
 async def show_search_menu(update: Update, context: CallbackContext):
@@ -226,7 +224,6 @@ async def show_search_menu(update: Update, context: CallbackContext):
             "Выберите, по какому параметру выполнить поиск:",
             reply_markup=reply_markup
         )
-
 
 # обработка ввода текста (после выбора типа локального поиска)
 async def handle_text(update: Update, context: CallbackContext):
@@ -326,8 +323,6 @@ def search_contact_info(query: str, search_type: str):
         cursor.close()
         conn.close()
 
-
-
 # форматируем данные, заменяя None/Null... на "Не указано"
 def format_contact_data(contact):
     formatted_contact = {
@@ -374,8 +369,11 @@ def serialize_data(value):
 # выдача информации о сотрудниках с учетом выдачи выбранной информации в настройках
 async def send_individual_results(update, result, selected_columns):
     if result:
+        all_contact_info = ""  # Здесь будем собирать информацию о всех сотрудниках
+
+        # Собираем информацию о каждом сотруднике
         for row in result:
-            contact_info = "Информация о контакте:\n"
+            contact_info = ""
 
             # Логируем содержимое строки для отладки
             logging.info(f"Контактные данные: {row}")
@@ -387,23 +385,33 @@ async def send_individual_results(update, result, selected_columns):
                     value = row.get(col, 'Не указано')
                     contact_info += f"{col}: {value}\n"
 
-            contact_info += "\n-----------------------\n"
+            contact_info += "-----------------------\n"
+            
+            # Добавляем информацию о текущем сотруднике к общей строке
+            all_contact_info += contact_info
 
-            await update.message.reply_text(contact_info)
+        # Теперь делим весь собранный текст на части, учитывая информацию о сотрудниках
+        message_parts = split_message(all_contact_info)
+
+        # Отправляем каждую часть сообщения
+        for part in message_parts:
+            await update.message.reply_text(part)
     else:
-        await update.message.reply_text("Контакт не найден в базе данных.")
+        await update.message.reply_text("Контакты не найдены в базе данных.")
 
-
-
-# разбиение длинного текста на несколько частей, если превышает ограничение символов
 def split_message(message: str):
-    # Разбиваем сообщение на части, если оно слишком длинное
+    # Разбиваем сообщение на части, если оно слишком длинное, но при этом не разделяем информацию о сотрудниках.
     parts = []
     while len(message) > MAX_MESSAGE_LENGTH:
-        parts.append(message[:MAX_MESSAGE_LENGTH])
-        message = message[MAX_MESSAGE_LENGTH:]
+        # Найдем ближайшую точку, чтобы не разделить информацию о сотруднике
+        split_point = message.rfind("\n-----------------------\n", 0, MAX_MESSAGE_LENGTH)
+        if split_point == -1:  # Если не нашли, просто разрезаем по длине
+            split_point = MAX_MESSAGE_LENGTH
+        parts.append(message[:split_point])
+        message = message[split_point:]
     parts.append(message)
     return parts
+
 
 # запуск бота
 def main():
