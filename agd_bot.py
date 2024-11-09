@@ -1,23 +1,36 @@
 import logging
 import psycopg2
-import psycopg2.extras  # Для работы с DictCursor
+import psycopg2.extras 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, filters
 from datetime import date
-import asyncio
 
+# максимальная длина сообщения для Telegram (ограничение самого телеграма)
+MAX_MESSAGE_LENGTH = 4096
+
+# подключение к БД
+db_params = {
+    'host': 'localhost',
+    'port': '5432',
+    'database': 'agd_db',
+    'user': 'postgres',
+    'password': '1488'
+}
+
+# название кропок для фильтра в настройках поиска
 COLUMNS = [
-    "ФИО", "Документ", "Направление", "Должность", "Уровень", "Специализация", "Gmail",
+    "ФИО", "Док ИС", "Направление", "Роль", "Уровень", "Специализация", "Gmail",
     "Контактная почта", "Git email", "GitHub ник", "Портфолио 1", "Портфолио 2", 
-    "Телеграм", "Discord", "Страна", "Город", "День рождения", "CV", "Источник", 
+    "Телеграм", "Discord", "Страна", "Город", "День рождения", "CV", "Отклик", 
     "Метка", "Steam", "Телефон", "VK", "LinkedIn", "Комментарий", "Проекты"
 ]
 
+# ключи кнопок фильтра для поиску по БД
 COLUMN_TO_DB = {
     "ФИО": "name",
-    "Документ": "doc_is",
+    "Док ИС": "doc_is",
     "Направление": "direction",
-    "Должность": "job_position_name",
+    "Роль": "job_position_name",
     "Уровень": "level_name",
     "Специализация": "specialization",
     "Gmail": "gmail",
@@ -32,7 +45,7 @@ COLUMN_TO_DB = {
     "Город": "city",
     "День рождения": "birthday",
     "CV": "cv",
-    "Источник": "referral_source",
+    "Отклик": "referral_source",
     "Метка": "label",
     "Steam": "steam",
     "Телефон": "phone",
@@ -42,233 +55,16 @@ COLUMN_TO_DB = {
     "Проекты": "projects"
 }
 
-def format_contact_data(contact):
-    # Форматируем данные, заменяя None на "Не указано"
-    formatted_contact = {
-        'ФИО': contact.get('name', 'Не указано'),
-        'Документ': contact.get('doc_is', 'Не указано'),
-        'Направление': contact.get('direction', 'Не указано'),
-        'Должность': contact.get('job_position_name', 'Не указано'),
-        'Уровень': contact.get('level_name', 'Не указано'),
-        'Специализация': contact.get('specialization', 'Не указано'),
-        'Gmail': contact.get('gmail', 'Не указано'),
-        'Контактная почта': contact.get('contact_email', 'Не указано'),
-        'Git email': contact.get('git_email', 'Не указано'),
-        'GitHub ник': contact.get('nick_github', 'Не указано'),
-        'Портфолио 1': contact.get('portfolio_1', 'Не указано'),
-        'Портфолио 2': contact.get('portfolio_2', 'Не указано'),
-        'Телеграм': contact.get('telegram', 'Не указано'),
-        'Discord': contact.get('discord', 'Не указано'),
-        'Страна': contact.get('country', 'Не указано'),
-        'Город': contact.get('city', 'Не указано'),
-        'День рождения': contact.get('birthday', 'Не указано'),
-        'CV': contact.get('cv', 'Не указано'),
-        'Источник': contact.get('referral_source', 'Не указано'),
-        'Метка': contact.get('label', 'Не указано'),
-        'Steam': contact.get('steam', 'Не указано'),
-        'Телефон': contact.get('phone', 'Не указано'),
-        'VK': contact.get('vk', 'Не указано'),
-        'LinkedIn': contact.get('linkedin', 'Не указано'),
-        'Комментарий': contact.get('comment', 'Не указано'),
-        'Проекты': contact.get('projects', 'Не указано'),
-    }
-    return formatted_contact
-
-
+# выбор SQL запроса к БД в меню для локального поиска (кнопки)
 search_conditions = {
     "ФИО": "name ILIKE %s",
     "Проекты": "projects ILIKE %s",
-    "Должность": "job_position_name ILIKE %s",
+    "Роль": "job_position_name ILIKE %s",
     "Отдел": "direction ILIKE %s",
     "Телеграм": "telegram ILIKE %s",
 }
 
-# Параметры подключения к базе данных
-db_params = {
-    'host': 'localhost',
-    'port': '5432',
-    'database': 'agd_db',
-    'user': 'postgres',
-    'password': '1488'
-}
-
-# Максимальная длина сообщения для Telegram
-MAX_MESSAGE_LENGTH = 4096
-
-# Функция для поиска информации по запросу
-def search_contact_info(query: str, search_type: str):
-    try:
-        logging.info(f"Начинаем поиск по запросу: {query} для типа поиска: {search_type}")
-
-        # Подключаемся к базе данных
-        conn = psycopg2.connect(**db_params)
-        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-        # Проверка типа поиска
-        if search_type not in COLUMN_TO_DB:
-            logging.error(f"Неверный тип поиска: {search_type}")
-            return "Неверный тип поиска."
-
-        # Получаем имя столбца для запроса
-        db_column_name = COLUMN_TO_DB[search_type]
-        
-        # Формируем SQL запрос
-        query_string = f"SELECT * FROM contacts WHERE {db_column_name} ILIKE %s"
-        like_query = f"%{query.strip()}%"  # Убираем лишние пробелы
-
-        logging.info(f"Исполняем запрос: {query_string} с параметрами: {like_query}")
-
-        # Выполняем запрос
-        cursor.execute(query_string, (like_query,))
-        result = cursor.fetchall()
-
-        # Логируем полученные данные из базы данных
-        logging.info(f"Полученные данные из базы: {result}")
-
-        # Логируем количество полученных результатов
-        logging.info(f"Получены результаты: {len(result)}")
-
-        if result:
-            # Форматируем и логируем данные
-            formatted_result = [format_contact_data(contact) for contact in result]
-            logging.info(f"Форматированные данные: {formatted_result}")
-            
-            return formatted_result
-        else:
-            logging.info("Контакты не найдены.")
-            return "Контакты не найдены."
-
-    except Exception as e:
-        logging.error(f"Ошибка при поиске данных: {e}")
-        return f"Ошибка при поиске данных: {e}"
-
-    finally:
-        logging.info("Закрытие соединения с базой данных")
-        cursor.close()
-        conn.close()
-
-# Функция для разбиения длинного текста на несколько частей
-def split_message(message: str):
-    # Разбиваем сообщение на части, если оно слишком длинное
-    parts = []
-    while len(message) > MAX_MESSAGE_LENGTH:
-        parts.append(message[:MAX_MESSAGE_LENGTH])
-        message = message[MAX_MESSAGE_LENGTH:]
-    parts.append(message)
-    return parts
-
-# Функция для сериализации данных
-def serialize_data(value):
-    # Если это объект типа date, то форматируем его в строку
-    if isinstance(value, date):
-        return value.strftime('%d-%m-%Y')
-    # Если это None, возвращаем пустую строку
-    elif value is None:
-        return ""
-    # Для других типов данных возвращаем их строковое представление
-    return str(value)
-
-async def send_individual_results(update, result, selected_columns):
-    if result:
-        for row in result:
-            contact_info = "Информация о контакте:\n"
-            
-            # Логируем содержимое строки для отладки
-            logging.info(f"Контактные данные: {row}")
-
-            for col in selected_columns:
-                # Проверяем, что значение для данного столбца есть
-                value = row.get(col, 'Не указано')
-                contact_info += f"{col}: {value}\n"
-            contact_info += "\n-----------------------\n"
-
-            await update.message.reply_text(contact_info)
-    else:
-        await update.message.reply_text("Контакт не найден в базе данных.")
-
-async def show_settings_menu(update: Update, context: CallbackContext):
-    context.user_data['menu_level'] = 'settings'
-
-    # Кнопка "Изменить информацию поиска" и "Назад"
-    keyboard = [
-        [InlineKeyboardButton("Изменить информацию поиска", callback_data='edit_search_info')],
-        [InlineKeyboardButton("Назад", callback_data='back_to_start')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.callback_query.edit_message_text(
-        "Настройки:",
-        reply_markup=reply_markup
-    )
-
-async def edit_search_info(update: Update, context: CallbackContext):
-    context.user_data['menu_level'] = 'edit_search_info'
-
-    # Создаем кнопки для каждого столбца
-    keyboard = []
-    selected_columns = context.user_data.get('selected_columns', set())
-
-    for col in COLUMNS:
-        # Если столбец выбран, помечаем его
-        label = f"✅ {col}" if col in selected_columns else col
-        keyboard.append([InlineKeyboardButton(label, callback_data=f'toggle_column_{col}')])
-
-    # Добавляем кнопку "Сохранить" и "Назад"
-    keyboard.append([InlineKeyboardButton("Сохранить", callback_data='save_columns')])
-    keyboard.append([InlineKeyboardButton("Назад", callback_data='back_to_settings')])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.callback_query.edit_message_text(
-        "Выберите, какую информацию показывать в результатах поиска:",
-        reply_markup=reply_markup
-    )    
-
-async def start(update: Update, context: CallbackContext):
-    context.user_data['menu_level'] = 'start'
-
-    # Создаем кнопки "Начать поиск" и "Настройки"
-    keyboard = [
-        [InlineKeyboardButton("Начать поиск", callback_data='start_search')],
-        [InlineKeyboardButton("Настройки", callback_data='settings')]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    if update.message:
-        await update.message.reply_text(
-            "Добро пожаловать! Пожалуйста, выберите действие:",
-            reply_markup=reply_markup
-        )
-    elif update.callback_query:
-        await update.callback_query.edit_message_text(
-            "Добро пожаловать! Пожалуйста, выберите действие:",
-            reply_markup=reply_markup
-        )
-
-async def show_search_menu(update: Update, context: CallbackContext):
-    context.user_data['menu_level'] = 'search_menu'
-
-    # Получаем текущий выбранный тип поиска, если он есть
-    selected_search_type = context.user_data.get('search_type')
-
-    # Кнопки для выбора типа поиска с добавлением/удалением галочки
-    keyboard = []
-    for search_type in search_conditions.keys():
-        label = search_type
-        if selected_search_type == search_type:
-            label = f"✅ {search_type}"  # Добавляем галочку
-        keyboard.append([InlineKeyboardButton(label, callback_data=search_type)])
-
-    # Добавляем кнопку "Назад"
-    keyboard.append([InlineKeyboardButton("Назад", callback_data='back_to_start')])
-
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    await update.callback_query.edit_message_text(
-        "Выберите, по какому параметру выполнить поиск:",
-        reply_markup=reply_markup
-    )
-
+# обработка взаимодействия с кнопками
 async def button(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
@@ -295,6 +91,14 @@ async def button(update: Update, context: CallbackContext):
         # Обновляем выбранные столбцы в контексте
         context.user_data['selected_columns'] = selected_columns
         await edit_search_info(update, context)  # Обновляем сообщение
+    elif query.data == 'select_all':
+        # При нажатии на "Выбрать все", выбираем все колонки
+        context.user_data['selected_columns'] = set(COLUMNS)
+        await edit_search_info(update, context)  # Обновляем сообщение
+    elif query.data == 'clear_all':
+        # При нажатии на "Сброс", очищаем все выбранные колонки
+        context.user_data['selected_columns'] = set()
+        await edit_search_info(update, context)  # Обновляем сообщение
     elif query.data == 'save_columns':
         await show_settings_menu(update, context)  # Возвращаемся в меню настроек
     elif query.data == 'back_to_settings':
@@ -307,7 +111,117 @@ async def button(update: Update, context: CallbackContext):
         # Переходим к выбору параметра для поиска, обновляя галочку на кнопке
         await show_search_menu(update, context)  # Обновляем меню с галочкой
 
-# Функция для обработки текста (после выбора кнопки)
+
+# команда старт
+async def start(update: Update, context: CallbackContext):
+    context.user_data['menu_level'] = 'start'
+
+    # Создаем кнопки "Начать поиск" и "Настройки"
+    keyboard = [
+        [InlineKeyboardButton("Начать поиск", callback_data='start_search')],
+        [InlineKeyboardButton("Настройки", callback_data='settings')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if update.message:
+        await update.message.reply_text(
+            "Добро пожаловать! Пожалуйста, выберите действие:",
+            reply_markup=reply_markup
+        )
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(
+            "Добро пожаловать! Пожалуйста, выберите действие:",
+            reply_markup=reply_markup
+        )
+
+# меню настроек
+async def show_settings_menu(update: Update, context: CallbackContext):
+    context.user_data['menu_level'] = 'settings'
+
+    # Кнопка "Фильтр выдачи" и "Назад"
+    keyboard = [
+        [InlineKeyboardButton("Фильтр выдачи", callback_data='edit_search_info')],
+        [InlineKeyboardButton("Назад", callback_data='back_to_start')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.callback_query.edit_message_text(
+        "Настройки:",
+        reply_markup=reply_markup
+    )
+
+# выбор выдачи информации и ее сохранение (например, выдавать только ФИО, тг, прокеты сотрудника)
+async def edit_search_info(update: Update, context: CallbackContext):
+    context.user_data['menu_level'] = 'edit_search_info'
+
+    # Получаем текущие выбранные колонки из контекста
+    selected_columns = context.user_data.get('selected_columns', set())
+
+    # Создаем клавиатуру
+    keyboard = []
+    row = []
+
+    # Добавляем кнопки "Выбрать все" и "Сброс" в начало клавиатуры
+    keyboard.append([
+        InlineKeyboardButton("Выбрать все", callback_data='select_all'),
+        InlineKeyboardButton("Сброс", callback_data='clear_all')
+    ])
+
+    # Создаем кнопки для каждого столбца
+    for idx, col in enumerate(COLUMNS):
+        # Отмечаем выбранные колонки галочкой
+        label = f"✅ {col}" if col in selected_columns else col
+        row.append(InlineKeyboardButton(label, callback_data=f'toggle_column_{col}'))
+
+        # Добавляем кнопки по четыре в ряд
+        if (idx + 1) % 4 == 0:
+            keyboard.append(row)
+            row = []
+
+    # Добавляем оставшиеся кнопки, если их меньше четырех
+    if row:
+        keyboard.append(row)
+
+    # Добавляем кнопку "Сохранить" и "Назад" на отдельные строки
+    keyboard.append([InlineKeyboardButton("Сохранить", callback_data='save_columns')])
+    keyboard.append([InlineKeyboardButton("Назад", callback_data='back_to_settings')])
+
+    # Создаем разметку для клавиатуры
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Отправляем обновленное сообщение с клавиатурой
+    await update.callback_query.edit_message_text(
+        "Выберите, какую информацию показывать в результатах поиска:",
+        reply_markup=reply_markup
+    )
+
+
+# выбор локального поиска, например по ФИО, тг или проекту
+async def show_search_menu(update: Update, context: CallbackContext):
+    context.user_data['menu_level'] = 'search_menu'
+
+    # Получаем текущий выбранный тип поиска, если он есть
+    selected_search_type = context.user_data.get('search_type')
+
+    # Кнопки для выбора типа поиска с добавлением/удалением галочки
+    keyboard = []
+    for search_type in search_conditions.keys():
+        label = search_type
+        if selected_search_type == search_type:
+            label = f"✅ {search_type}"  # Добавляем галочку
+        keyboard.append([InlineKeyboardButton(label, callback_data=search_type)])
+
+    # Добавляем кнопку "Назад"
+    keyboard.append([InlineKeyboardButton("Назад", callback_data='back_to_start')])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.callback_query.edit_message_text(
+        "Выберите, по какому параметру выполнить поиск:",
+        reply_markup=reply_markup
+    )
+
+# обработка ввода текста (после выбора типа локального поиска)
 async def handle_text(update: Update, context: CallbackContext):
     search_type = context.user_data.get('search_type')
     if not search_type:
@@ -328,7 +242,154 @@ async def handle_text(update: Update, context: CallbackContext):
         # Если возникла ошибка или не найдено, отправляем сообщение об ошибке
         await update.message.reply_text(result)
 
-# Основная функция для запуска бота
+# поиск информации в БД по запросу
+def search_contact_info(query: str, search_type: str):
+    try:
+        logging.info(f"Начинаем поиск по запросу: {query} для типа поиска: {search_type}")
+
+        # Подключаемся к базе данных
+        conn = psycopg2.connect(**db_params)
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+        # Проверка типа поиска
+        if search_type not in COLUMN_TO_DB:
+            logging.error(f"Неверный тип поиска: {search_type}")
+            return "Неверный тип поиска."
+
+        # Получаем имя столбца для запроса
+        db_column_name = COLUMN_TO_DB[search_type]
+        
+        # Формируем SQL запрос для поиска контактов
+        query_string = f"SELECT * FROM contacts WHERE {db_column_name} ILIKE %s"
+        like_query = f"%{query.strip()}%"  # Убираем лишние пробелы
+
+        logging.info(f"Исполняем запрос: {query_string} с параметрами: {like_query}")
+
+        # Выполняем запрос
+        cursor.execute(query_string, (like_query,))
+        result = cursor.fetchall()
+
+        # Логируем полученные данные из базы данных
+        logging.info(f"Полученные данные из базы: {result}")
+
+        if result:
+            formatted_result = []
+            # Теперь для каждого контакта получаем связанные проекты
+            for contact in result:
+                # Получаем проекты для контакта
+                contact_id = contact['contact_id']
+                cursor.execute("""
+                    SELECT p.project_name
+                    FROM projects p
+                    JOIN contact_projects cp ON p.project_id = cp.project_id
+                    WHERE cp.contact_id = %s
+                """, (contact_id,))
+                projects = cursor.fetchall()
+
+                # Преобразуем проекты в строку
+                project_names = [project['project_name'] for project in projects]
+                contact['projects'] = ', '.join(project_names) if project_names else 'Нет проектов'
+
+                # Форматируем контакт с добавленными проектами
+                formatted_result.append(format_contact_data(contact))
+
+            logging.info(f"Форматированные данные: {formatted_result}")
+            return formatted_result
+        else:
+            logging.info("Контакты не найдены.")
+            return "Контакты не найдены."
+
+    except Exception as e:
+        logging.error(f"Ошибка при поиске данных: {e}")
+        return f"Ошибка при поиске данных: {e}"
+
+    finally:
+        logging.info("Закрытие соединения с базой данных")
+        cursor.close()
+        conn.close()
+
+
+# форматируем данные, заменяя None/Null... на "Не указано"
+def format_contact_data(contact):
+    formatted_contact = {
+        'ФИО': contact.get('name', 'Не указано'),
+        'Док ИС': contact.get('doc_is', 'Не указано'),
+        'Направление': contact.get('direction', 'Не указано'),
+        'Роль': contact.get('job_position_name', 'Не указано'),
+        'Уровень': contact.get('level_name', 'Не указано'),
+        'Специализация': contact.get('specialization', 'Не указано'),
+        'Gmail': contact.get('gmail', 'Не указано'),
+        'Контактная почта': contact.get('contact_email', 'Не указано'),
+        'Git email': contact.get('git_email', 'Не указано'),
+        'GitHub ник': contact.get('nick_github', 'Не указано'),
+        'Портфолио 1': contact.get('portfolio_1', 'Не указано'),
+        'Портфолио 2': contact.get('portfolio_2', 'Не указано'),
+        'Телеграм': contact.get('telegram', 'Не указано'),
+        'Discord': contact.get('discord', 'Не указано'),
+        'Страна': contact.get('country', 'Не указано'),
+        'Город': contact.get('city', 'Не указано'),
+        'День рождения': contact.get('birthday', 'Не указано'),
+        'CV': contact.get('cv', 'Не указано'),
+        'Отклик': contact.get('referral_source', 'Не указано'),
+        'Метка': contact.get('label', 'Не указано'),
+        'Steam': contact.get('steam', 'Не указано'),
+        'Телефон': contact.get('phone', 'Не указано'),
+        'VK': contact.get('vk', 'Не указано'),
+        'LinkedIn': contact.get('linkedin', 'Не указано'),
+        'Комментарий': contact.get('comment', 'Не указано'),
+        'Проекты': contact.get('projects', 'Не указано'),
+    }
+    return formatted_contact
+
+# сериализация данных (передача данных для бота должна быть определенного формата)
+def serialize_data(value):
+    # Если это объект типа date, то форматируем его в строку
+    if isinstance(value, date):
+        return value.strftime('%d-%m-%Y')
+    # Если это None, возвращаем пустую строку
+    elif value is None:
+        return ""
+    # Для других типов данных возвращаем их строковое представление
+    return str(value)
+
+# выдача информации о сотрудниках с учетом выдачи выбранной информации в настройках
+async def send_individual_results(update, result, selected_columns):
+    if result:
+        for row in result:
+            contact_info = "Информация о контакте:\n"
+
+            # Логируем содержимое строки для отладки
+            logging.info(f"Контактные данные: {row}")
+
+            # Проходим по COLUMNS и выводим только те столбцы, которые были выбраны
+            for col in COLUMNS:  # Используем COLUMNS для соблюдения порядка
+                if col in selected_columns:
+                    # Проверяем, что значение для данного столбца есть
+                    value = row.get(col, 'Не указано')
+                    contact_info += f"{col}: {value}\n"
+            
+            # Добавляем информацию о проектах
+            contact_info += f"Проекты: {row.get('projects', 'Нет проектов')}\n"
+
+            contact_info += "\n-----------------------\n"
+
+            await update.message.reply_text(contact_info)
+    else:
+        await update.message.reply_text("Контакт не найден в базе данных.")
+
+
+
+# разбиение длинного текста на несколько частей, если превышает ограничение символов
+def split_message(message: str):
+    # Разбиваем сообщение на части, если оно слишком длинное
+    parts = []
+    while len(message) > MAX_MESSAGE_LENGTH:
+        parts.append(message[:MAX_MESSAGE_LENGTH])
+        message = message[MAX_MESSAGE_LENGTH:]
+    parts.append(message)
+    return parts
+
+# запуск бота
 def main():
     # Указываем токен вашего бота
     bot_token = '7965334033:AAG51HpKRBK8RmzYBCgqg-Mj7PMPijNL1WM'
