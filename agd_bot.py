@@ -57,11 +57,11 @@ COLUMN_TO_DB = {
 
 # выбор SQL запроса к БД в меню для локального поиска (кнопки)
 search_conditions = {
-    "ФИО": "name ILIKE %s",
-    "Проекты": "projects ILIKE %s",
-    "Роль": "job_position_name ILIKE %s",
-    "Отдел": "direction ILIKE %s",
-    "Телеграм": "telegram ILIKE %s",
+    "ФИО": {"column": "name", "join": False},
+    "Роль": {"column": "job_position_name", "join": False},
+    "Отдел": {"column": "direction", "join": False},
+    "Телеграм": {"column": "telegram", "join": False},
+    "Проект": {"column": "project", "join": True}
 }
 
 # обработка взаимодействия с кнопками
@@ -216,10 +216,17 @@ async def show_search_menu(update: Update, context: CallbackContext):
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.callback_query.edit_message_text(
-        "Выберите, по какому параметру выполнить поиск:",
-        reply_markup=reply_markup
-    )
+    # Проверяем, отличается ли текущее сообщение от предлагаемого
+    current_message = update.callback_query.message.text
+    current_markup = update.callback_query.message.reply_markup
+
+    # Если текущее сообщение и разметка не изменились, не обновляем
+    if current_message != "Выберите, по какому параметру выполнить поиск:" or current_markup != reply_markup:
+        await update.callback_query.edit_message_text(
+            "Выберите, по какому параметру выполнить поиск:",
+            reply_markup=reply_markup
+        )
+
 
 # обработка ввода текста (после выбора типа локального поиска)
 async def handle_text(update: Update, context: CallbackContext):
@@ -251,17 +258,28 @@ def search_contact_info(query: str, search_type: str):
         conn = psycopg2.connect(**db_params)
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        # Проверка типа поиска
-        if search_type not in COLUMN_TO_DB:
+        # Проверка типа поиска и наличие настройки 'join'
+        if search_type not in search_conditions:
             logging.error(f"Неверный тип поиска: {search_type}")
             return "Неверный тип поиска."
 
-        # Получаем имя столбца для запроса
-        db_column_name = COLUMN_TO_DB[search_type]
-        
-        # Формируем SQL запрос для поиска контактов
-        query_string = f"SELECT * FROM contacts WHERE {db_column_name} ILIKE %s"
-        like_query = f"%{query.strip()}%"  # Убираем лишние пробелы
+        search_info = search_conditions[search_type]
+
+        if search_info["join"]:
+            # Если 'join' == True, ищем через JOIN запрос
+            if search_type == "Проект":
+                query_string = """
+                    SELECT c.* FROM contacts c
+                    JOIN contact_projects cp ON c.contact_id = cp.contact_id
+                    JOIN projects p ON cp.project_id = p.project_id
+                    WHERE p.project_name ILIKE %s
+                """
+                like_query = f"%{query.strip()}%"  # Ищем по проекту, игнорируя регистр
+        else:
+            # Если 'join' == False, обычный запрос по столбцу
+            column_name = search_info["column"]
+            query_string = f"SELECT * FROM contacts WHERE {column_name} ILIKE %s"
+            like_query = f"%{query.strip()}%"  # Ищем по столбцу, игнорируя регистр
 
         logging.info(f"Исполняем запрос: {query_string} с параметрами: {like_query}")
 
@@ -274,9 +292,9 @@ def search_contact_info(query: str, search_type: str):
 
         if result:
             formatted_result = []
-            # Теперь для каждого контакта получаем связанные проекты
+            # Теперь для каждого контакта получаем связанные проекты (если нужно)
             for contact in result:
-                # Получаем проекты для контакта
+                # Получаем проекты для контакта, если это нужно (по связующей таблице)
                 contact_id = contact['contact_id']
                 cursor.execute("""
                     SELECT p.project_name
@@ -307,6 +325,7 @@ def search_contact_info(query: str, search_type: str):
         logging.info("Закрытие соединения с базой данных")
         cursor.close()
         conn.close()
+
 
 
 # форматируем данные, заменяя None/Null... на "Не указано"
