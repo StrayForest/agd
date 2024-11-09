@@ -367,9 +367,6 @@ async def send_individual_results(update, result, selected_columns):
                     # Проверяем, что значение для данного столбца есть
                     value = row.get(col, 'Не указано')
                     contact_info += f"{col}: {value}\n"
-            
-            # Добавляем информацию о проектах
-            contact_info += f"Проекты: {row.get('projects', 'Нет проектов')}\n"
 
             contact_info += "\n-----------------------\n"
 
