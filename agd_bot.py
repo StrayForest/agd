@@ -17,7 +17,7 @@ db_params = {
     'password': '1488'
 }
 
-# название кропок для фильтра в настройках поиска
+# название кнопок для фильтра в настройках поиска
 COLUMNS = [
     "ФИО", "Док ИС", "Направление", "Роль", "Уровень", "Специализация", "Gmail",
     "Контактная почта", "Git email", "GitHub ник", "Портфолио 1", "Портфолио 2", 
@@ -25,7 +25,7 @@ COLUMNS = [
     "Метка", "Steam", "Телефон", "VK", "LinkedIn", "Комментарий", "Проекты"
 ]
 
-# ключи кнопок фильтра для поиску по БД
+# ключи кнопок фильтра для поиску по БД (колонки в БД называются иначе)
 COLUMN_TO_DB = {
     "ФИО": "name",
     "Док ИС": "doc_is",
@@ -55,7 +55,7 @@ COLUMN_TO_DB = {
     "Проекты": "projects"
 }
 
-# выбор SQL запроса к БД в меню для локального поиска (кнопки)
+# выбор SQL запроса к БД в меню для локального поиска (поиск по основной БД или по связанным)
 search_conditions = {
     "ФИО": {"column": "name", "join": False},
     "Роль": {"column": "job_position_name", "join": False},
@@ -194,7 +194,7 @@ async def edit_search_info(update: Update, context: CallbackContext):
         reply_markup=reply_markup
     )
 
-# выбор локального поиска, например по ФИО, тг или проекту
+# выбор локального поиска, например поиск по ФИО, тг или проекту
 async def show_search_menu(update: Update, context: CallbackContext):
     context.user_data['menu_level'] = 'search_menu'
 
@@ -399,6 +399,8 @@ async def send_individual_results(update, result, selected_columns):
     else:
         await update.message.reply_text("Контакты не найдены в базе данных.")
 
+# разделение выдаваемой информации на N сообщений в случае превышаения макс. кол-ва символов
+# информация о сотруднике не разделяется на N сообщений, полная информация о сотруднике всегда будет в одном сообщении целиком
 def split_message(message: str):
     # Разбиваем сообщение на части, если оно слишком длинное, но при этом не разделяем информацию о сотрудниках.
     parts = []
@@ -411,7 +413,6 @@ def split_message(message: str):
         message = message[split_point:]
     parts.append(message)
     return parts
-
 
 # запуск бота
 def main():
