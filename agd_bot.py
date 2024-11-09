@@ -289,65 +289,75 @@ def search_contact_info(query: str, search_type: str):
         else:
             # Если 'join' == False, обычный запрос по столбцу
             column_name = search_info["column"]
-            query_string = f"SELECT * FROM contacts WHERE {column_name} ILIKE %s"
+            query_string = f"SELECT contact_id FROM contacts WHERE {column_name} ILIKE %s"
             like_query = f"%{query.strip()}%"
 
         logging.info(f"Исполняем запрос: {query_string} с параметрами: {like_query}")
 
-        # Выполняем запрос
+        # Выполняем запрос для поиска contact_id по столбцу
         cursor.execute(query_string, (like_query,))
-        result = cursor.fetchall()
+        contact_ids = cursor.fetchall()
 
-        logging.info(f"Полученные данные из базы: {result}")
+        logging.info(f"Полученные contact_id из базы: {contact_ids}")
 
-        if result:
+        if contact_ids:
             formatted_result = []
 
-            for contact_row in result:
-                # Преобразуем контакт в словарь
-                contact = dict(contact_row)
-                contact_id = contact['contact_id']
+            for contact_row in contact_ids:
+                # Преобразуем contact_row в контакт
+                contact_id = contact_row['contact_id']
 
-                # Получаем проекты для контакта
+                # Теперь получаем всю информацию о контакте по найденному contact_id
                 cursor.execute("""
-                    SELECT p.project_name
-                    FROM projects p
-                    JOIN contact_projects cp ON p.project_id = cp.project_id
-                    WHERE cp.contact_id = %s
+                    SELECT *
+                    FROM contacts c
+                    WHERE c.contact_id = %s
                 """, (contact_id,))
-                projects = cursor.fetchall()
+                contact_data = cursor.fetchone()
 
-                # Получаем роли для контакта
-                logging.info(f"Выполняем запрос на роли для контакта {contact_id}")
-                cursor.execute("""
-                    SELECT jp.job_position_name
-                    FROM job_position jp
-                    JOIN contact_job_position cjp ON jp.job_position_name = cjp.job_position_name
-                    WHERE cjp.contact_id = %s
-                """, (contact_id,))
-                roles = cursor.fetchall()
+                if contact_data:
+                    # Преобразуем контакт в словарь
+                    contact = dict(contact_data)
 
-                # Логируем результат запроса на роль
-                logging.info(f"Роли для контакта {contact_id}: {roles}")
+                    # Получаем проекты для контакта
+                    cursor.execute("""
+                        SELECT p.project_name
+                        FROM projects p
+                        JOIN contact_projects cp ON p.project_id = cp.project_id
+                        WHERE cp.contact_id = %s
+                    """, (contact_id,))
+                    projects = cursor.fetchall()
 
-                # Объединяем проекты в строку
-                project_names = [project['project_name'] for project in projects]
-                contact['projects'] = ', '.join(project_names) if project_names else 'Нет проектов'
+                    # Получаем роли для контакта
+                    logging.info(f"Выполняем запрос на роли для контакта {contact_id}")
+                    cursor.execute("""
+                        SELECT jp.job_position_name
+                        FROM job_position jp
+                        JOIN contact_job_position cjp ON jp.job_position_name = cjp.job_position_name
+                        WHERE cjp.contact_id = %s
+                    """, (contact_id,))
+                    roles = cursor.fetchall()
 
-                # Объединяем роли в строку
-                role_names = [role['job_position_name'] for role in roles]
-                contact['job_position_name'] = ', '.join(role_names) if role_names else 'Нет ролей'
+                    # Логируем результат запроса на роль
+                    logging.info(f"Роли для контакта {contact_id}: {roles}")
 
-                # Форматируем контакт с добавленными проектами и ролями
-                formatted_result.append(format_contact_data(contact))
-                print(formatted_result)
+                    # Объединяем проекты в строку
+                    project_names = [project['project_name'] for project in projects]
+                    contact['projects'] = ', '.join(project_names) if project_names else 'Нет проектов'
+
+                    # Объединяем роли в строку
+                    role_names = [role['job_position_name'] for role in roles]
+                    contact['job_position_name'] = ', '.join(role_names) if role_names else 'Нет ролей'
+
+                    # Форматируем контакт с добавленными проектами и ролями
+                    formatted_result.append(format_contact_data(contact))
 
             logging.info(f"Форматированные данные: {formatted_result}")
             return formatted_result
         else:
             logging.info("Контакты не найдены.")
             return "Контакты не найдены."
-
+        
     except Exception as e:
         logging.error(f"Ошибка при поиске данных: {e}")
         return f"Ошибка при поиске данных: {e}"
