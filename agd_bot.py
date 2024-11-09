@@ -69,46 +69,49 @@ async def button(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
 
-    # Обработка выбора кнопок
+    # Проверка текущего уровня меню и обработка кнопок
     if query.data == 'start_search':
+        context.user_data['menu_level'] = 'search_menu'  # Обновляем уровень меню
         await show_search_menu(update, context)
     elif query.data == 'settings':
+        context.user_data['menu_level'] = 'settings_menu'  # Обновляем уровень меню
         await show_settings_menu(update, context)
     elif query.data == 'back_to_start':
+        context.user_data['menu_level'] = 'start'  # Возвращаемся в главное меню
         await start(update, context)
+    elif query.data == 'show_project_selection_menu':
+        context.user_data['menu_level'] = 'show_project_selection_menu'
+        await show_project_selection_menu(update, context)
     elif query.data == 'edit_search_info':
+        context.user_data['menu_level'] = 'edit_search_info'  # Уровень меню редактирования поиска
         await edit_search_info(update, context)
     elif query.data.startswith('toggle_column_'):
-        # Переключаем выбор столбца
         col_name = query.data.split('toggle_column_')[1]
         selected_columns = context.user_data.get('selected_columns', set())
 
+        # Добавление или удаление выбранного столбца
         if col_name in selected_columns:
             selected_columns.remove(col_name)
         else:
             selected_columns.add(col_name)
-
-        # Обновляем выбранные столбцы в контексте
         context.user_data['selected_columns'] = selected_columns
         await edit_search_info(update, context)  # Обновляем сообщение
     elif query.data == 'select_all':
-        # При нажатии на "Выбрать все", выбираем все колонки
         context.user_data['selected_columns'] = set(COLUMNS)
-        await edit_search_info(update, context)  # Обновляем сообщение
+        await edit_search_info(update, context)
     elif query.data == 'clear_all':
-        # При нажатии на "Сброс", очищаем все выбранные колонки
         context.user_data['selected_columns'] = set()
-        await edit_search_info(update, context)  # Обновляем сообщение
+        await edit_search_info(update, context)
     elif query.data == 'save_columns':
-        await show_settings_menu(update, context)  # Возвращаемся в меню настроек
+        context.user_data['menu_level'] = 'settings_menu'  # Возвращаемся в меню настроек
+        await show_settings_menu(update, context)
     elif query.data == 'back_to_settings':
+        context.user_data['menu_level'] = 'settings_menu'  # Обновляем уровень для настроек
         await show_settings_menu(update, context)
     
-    # Добавляем логику для установки типа поиска
+    # Логика для выбора типа поиска
     elif query.data in search_conditions.keys():
         context.user_data['search_type'] = query.data  # Устанавливаем тип поиска
-
-        # Переходим к выбору параметра для поиска, обновляя галочку на кнопке
         await show_search_menu(update, context)  # Обновляем меню с галочкой
 
 # команда старт
@@ -201,29 +204,83 @@ async def show_search_menu(update: Update, context: CallbackContext):
     # Получаем текущий выбранный тип поиска, если он есть
     selected_search_type = context.user_data.get('search_type')
 
+    # Если тип поиска "Проект", то переходим к отображению кнопок с проектами
+
     # Кнопки для выбора типа поиска с добавлением/удалением галочки
     keyboard = []
     for search_type in search_conditions.keys():
         label = search_type
         if selected_search_type == search_type:
-            label = f"✅ {search_type}"  # Добавляем галочку
-        keyboard.append([InlineKeyboardButton(label, callback_data=search_type)])
+            label = f"✅ {search_type}"  # Добавляем галочку для выбранного типа поиска
+        # Если ключ "Проект", проверяем, добавляем ли его с галочкой или без
+        if search_type == "Проект":
+            keyboard.append([InlineKeyboardButton(label, callback_data='show_project_selection_menu')])
+        else:
+            keyboard.append([InlineKeyboardButton(label, callback_data=search_type)])
 
     # Добавляем кнопку "Назад"
     keyboard.append([InlineKeyboardButton("Назад", callback_data='back_to_start')])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
+    new_text = "Выберите, по какому параметру выполнить поиск:"
 
-    # Проверяем, отличается ли текущее сообщение от предлагаемого
-    current_message = update.callback_query.message.text
-    current_markup = update.callback_query.message.reply_markup
+    # Получаем текущее сообщение и разметку клавиатуры
+    current_message_text = update.callback_query.message.text
+    current_markup_keyboard = update.callback_query.message.reply_markup.inline_keyboard if update.callback_query.message.reply_markup else []
 
-    # Если текущее сообщение и разметка не изменились, не обновляем
-    if current_message != "Выберите, по какому параметру выполнить поиск:" or current_markup != reply_markup:
+    # Преобразуем текущую и новую клавиатуры в обычные списки для корректного сравнения
+    new_keyboard_layout = [[button.text for button in row] for row in keyboard]
+    current_keyboard_layout = [[button.text for button in row] for row in current_markup_keyboard]
+
+    # Проверяем, отличается ли текст или разметка от текущих
+    if current_message_text != new_text or current_keyboard_layout != new_keyboard_layout:
         await update.callback_query.edit_message_text(
-            "Выберите, по какому параметру выполнить поиск:",
+            text=new_text,
             reply_markup=reply_markup
         )
+
+# получаем название всех проектов
+def get_projects_from_db():
+    # Здесь замените на ваши параметры подключения к базе данных
+    connection = psycopg2.connect(**db_params)
+    cursor = connection.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # Получаем все проекты из таблицы projects
+    cursor.execute("SELECT project_name FROM projects")
+    projects = cursor.fetchall()
+
+    cursor.close()
+    connection.close()
+
+    # Возвращаем список названий проектов
+    return [project['project_name'] for project in projects]
+
+# создаем меню с проектами для выбора
+async def show_project_selection_menu(update: Update, context: CallbackContext):
+    context.user_data['menu_level'] = 'show_project_selection_menu'
+    # Получаем список проектов из базы данных
+    projects = get_projects_from_db()
+
+    # Создаем клавиатуру с кнопками для каждого проекта
+    keyboard = [
+        [InlineKeyboardButton(project, callback_data=f"project_{project}")]
+        for project in projects
+    ]
+
+    # Добавляем кнопку "Назад"
+    keyboard.append([InlineKeyboardButton("Назад", callback_data='start_search')])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    new_text = "Выберите проект для поиска:"
+
+    # Проверка, отличается ли текст или разметка от текущих
+    current_message = update.callback_query.message
+    if current_message.text != new_text or current_message.reply_markup != reply_markup:
+        await update.callback_query.edit_message_text(
+            text=new_text,
+            reply_markup=reply_markup
+        )
+
 
 # обработка ввода текста (после выбора типа локального поиска)
 async def handle_text(update: Update, context: CallbackContext):
@@ -357,7 +414,6 @@ def search_contact_info(query: str, search_type: str):
         else:
             logging.info("Контакты не найдены.")
             return "Контакты не найдены."
-        
     except Exception as e:
         logging.error(f"Ошибка при поиске данных: {e}")
         return f"Ошибка при поиске данных: {e}"
@@ -366,7 +422,7 @@ def search_contact_info(query: str, search_type: str):
         logging.info("Закрытие соединения с базой данных")
         cursor.close()
         conn.close()
-
+    
 # форматируем данные, заменяя None/Null... на "Не указано"
 def format_contact_data(contact):
     formatted_contact = {
