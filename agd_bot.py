@@ -58,7 +58,7 @@ COLUMN_TO_DB = {
 # выбор SQL запроса к БД в меню для локального поиска (поиск по основной БД или по связанным)
 search_conditions = {
     "ФИО": {"column": "name", "join": False},
-    "Роль": {"column": "job_position_name", "join": False},
+    "Роль": {"column": "job_position_name", "join": True},
     "Отдел": {"column": "direction", "join": False},
     "Телеграм": {"column": "telegram", "join": False},
     "Проект": {"column": "project", "join": True} #true переводит нажатие кнопки в скрипт для поиска по привязанным таблицам через JOIN запрос
@@ -255,7 +255,7 @@ def search_contact_info(query: str, search_type: str):
         conn = psycopg2.connect(**db_params)
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        # Проверка типа поиска и наличие настройки 'join'
+        # Проверка типа поиска и настройка join
         if search_type not in search_conditions:
             logging.error(f"Неверный тип поиска: {search_type}")
             return "Неверный тип поиска."
@@ -266,17 +266,31 @@ def search_contact_info(query: str, search_type: str):
             # Если 'join' == True, ищем через JOIN запрос
             if search_type == "Проект":
                 query_string = """
-                    SELECT c.* FROM contacts c
-                    JOIN contact_projects cp ON c.contact_id = cp.contact_id
-                    JOIN projects p ON cp.project_id = p.project_id
+                    SELECT c.contact_id, c.name, jp.job_position_name
+                    FROM contacts c
+                    LEFT JOIN contact_projects cp ON c.contact_id = cp.contact_id
+                    LEFT JOIN projects p ON cp.project_id = p.project_id
+                    LEFT JOIN contact_job_position cjp ON c.contact_id = cjp.contact_id
+                    LEFT JOIN job_position jp ON cjp.job_position_name = jp.job_position_name
                     WHERE p.project_name ILIKE %s
                 """
-                like_query = f"%{query.strip()}%"  # Ищем по проекту, игнорируя регистр
+                like_query = f"%{query.strip()}%"
+
+            elif search_type == "Роль":
+                query_string = """
+                    SELECT c.contact_id, c.name, jp.job_position_name
+                    FROM contacts c
+                    LEFT JOIN contact_job_position cjp ON c.contact_id = cjp.contact_id
+                    LEFT JOIN job_position jp ON cjp.job_position_name = jp.job_position_name
+                    WHERE jp.job_position_name ILIKE %s
+                """
+                like_query = f"%{query.strip()}%"
+
         else:
             # Если 'join' == False, обычный запрос по столбцу
             column_name = search_info["column"]
             query_string = f"SELECT * FROM contacts WHERE {column_name} ILIKE %s"
-            like_query = f"%{query.strip()}%"  # Ищем по столбцу, игнорируя регистр
+            like_query = f"%{query.strip()}%"
 
         logging.info(f"Исполняем запрос: {query_string} с параметрами: {like_query}")
 
@@ -284,15 +298,17 @@ def search_contact_info(query: str, search_type: str):
         cursor.execute(query_string, (like_query,))
         result = cursor.fetchall()
 
-        # Логируем полученные данные из базы данных
         logging.info(f"Полученные данные из базы: {result}")
 
         if result:
             formatted_result = []
-            # Теперь для каждого контакта получаем связанные проекты (если нужно)
-            for contact in result:
-                # Получаем проекты для контакта, если это нужно (по связующей таблице)
+
+            for contact_row in result:
+                # Преобразуем контакт в словарь
+                contact = dict(contact_row)
                 contact_id = contact['contact_id']
+
+                # Получаем проекты для контакта
                 cursor.execute("""
                     SELECT p.project_name
                     FROM projects p
@@ -301,12 +317,30 @@ def search_contact_info(query: str, search_type: str):
                 """, (contact_id,))
                 projects = cursor.fetchall()
 
-                # Преобразуем проекты в строку
+                # Получаем роли для контакта
+                logging.info(f"Выполняем запрос на роли для контакта {contact_id}")
+                cursor.execute("""
+                    SELECT jp.job_position_name
+                    FROM job_position jp
+                    JOIN contact_job_position cjp ON jp.job_position_name = cjp.job_position_name
+                    WHERE cjp.contact_id = %s
+                """, (contact_id,))
+                roles = cursor.fetchall()
+
+                # Логируем результат запроса на роль
+                logging.info(f"Роли для контакта {contact_id}: {roles}")
+
+                # Объединяем проекты в строку
                 project_names = [project['project_name'] for project in projects]
                 contact['projects'] = ', '.join(project_names) if project_names else 'Нет проектов'
 
-                # Форматируем контакт с добавленными проектами
+                # Объединяем роли в строку
+                role_names = [role['job_position_name'] for role in roles]
+                contact['job_position_name'] = ', '.join(role_names) if role_names else 'Нет ролей'
+
+                # Форматируем контакт с добавленными проектами и ролями
                 formatted_result.append(format_contact_data(contact))
+                print(formatted_result)
 
             logging.info(f"Форматированные данные: {formatted_result}")
             return formatted_result
