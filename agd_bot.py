@@ -66,7 +66,6 @@ search_conditions = {
 
 # обработка взаимодействия с кнопками
 async def button(update: Update, context: CallbackContext):
-    projects = get_projects_from_db()
     query = update.callback_query
     await query.answer()
     print(query.data)
@@ -83,7 +82,15 @@ async def button(update: Update, context: CallbackContext):
         await start(update, context)
     elif query.data == 'show_project_selection_menu':
         context.user_data['menu_level'] = 'show_project_selection_menu'
-        await show_project_selection_menu(update, context)
+
+        # Подгружаем актуальные проекты каждый раз при переходе в меню
+        projects = get_projects_from_db()
+
+        # Сохраняем обновленный список проектов в context.user_data
+        context.user_data['projects'] = projects
+
+        # Передаем список проектов в функцию для отображения меню
+        await show_project_selection_menu(update, context, projects)
     elif query.data == 'edit_search_info':
         context.user_data['menu_level'] = 'edit_search_info'  # Уровень меню редактирования поиска
         await edit_search_info(update, context)
@@ -116,13 +123,15 @@ async def button(update: Update, context: CallbackContext):
         context.user_data['search_type'] = query.data  # Устанавливаем тип поиска
         await show_search_menu(update, context)  # Обновляем меню с галочкой
     
-    elif query.data in projects:
+    elif query.data in context.user_data['projects']:
         search_type = 'Проект'
         await handle_text(update, context, search_type)
+
 # команда старт
 async def start(update: Update, context: CallbackContext):
     context.user_data['menu_level'] = 'start'
-
+    projects = get_projects_from_db()
+    context.user_data['projects'] = projects
     # Создаем кнопки "Начать поиск" и "Настройки"
     keyboard = [
         [InlineKeyboardButton("Начать поиск", callback_data='start_search')],
@@ -259,29 +268,31 @@ def get_projects_from_db():
     return [project['project_name'] for project in projects]
 
 # создаем меню с проектами для выбора
-async def show_project_selection_menu(update: Update, context: CallbackContext):
+async def show_project_selection_menu(update: Update, context: CallbackContext, projects: list):
     context.user_data['menu_level'] = 'show_project_selection_menu'
-    # Получаем список проектов из базы данных
-    projects = get_projects_from_db()
 
-    # Создаем клавиатуру с кнопками для каждого проекта списком
+    # Создаем клавиатуру с кнопками для каждого проекта
     keyboard = [
-        [InlineKeyboardButton(project, callback_data=project)]
+        [InlineKeyboardButton(project, callback_data=project)]  # Каждая кнопка с именем проекта
         for project in projects
     ]
 
+    # Добавляем кнопку "Назад"
     keyboard.append([InlineKeyboardButton("Назад", callback_data='start_search')])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
     new_text = "Выберите проект для поиска:"
 
-    # Проверка, отличается ли текст или разметка от текущих
+    # Получаем текущее сообщение и проверяем, нужно ли его обновить
     current_message = update.callback_query.message
     if current_message.text != new_text or current_message.reply_markup != reply_markup:
+        # Обновляем сообщение с новыми данными
         await update.callback_query.edit_message_text(
             text=new_text,
             reply_markup=reply_markup
         )
+
+
 
 # обработка ввода текста (после выбора типа локального поиска)
 async def handle_text(update: Update, context: CallbackContext, search_type: str = None):
