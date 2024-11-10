@@ -292,8 +292,6 @@ async def show_project_selection_menu(update: Update, context: CallbackContext, 
             reply_markup=reply_markup
         )
 
-
-
 # обработка ввода текста (после выбора типа локального поиска)
 async def handle_text(update: Update, context: CallbackContext, search_type: str = None):
     # Если search_type не передан, пытаемся взять его из context.user_data
@@ -332,7 +330,7 @@ def search_contact_info(query: str, search_type: str):
 
         search_info = search_conditions[search_type]
 
-        if search_type == 'Проект' or search_type == 'Роль':
+        if search_info['join']:
             # Если 'join' == True, ищем через JOIN запрос
             if search_type == "Проект":
                 query_string = """
