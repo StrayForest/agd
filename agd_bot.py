@@ -17,14 +17,6 @@ db_params = {
     'password': '1488'
 }
 
-# название кнопок для фильтра в настройках поиска
-COLUMNS = [
-    "ФИО", "Док ИС", "Направление", "Роль", "Уровень", "Специализация", "Gmail",
-    "Контактная почта", "Git email", "GitHub ник", "Портфолио 1", "Портфолио 2", 
-    "Телеграм", "Discord", "Страна", "Город", "День рождения", "CV", "Отклик", 
-    "Метка", "Steam", "Телефон", "VK", "LinkedIn", "Комментарий", "Проекты"
-]
-
 # ключи кнопок фильтра для поиску по БД (колонки в БД называются иначе)
 COLUMN_TO_DB = {
     "ФИО": "name",
@@ -34,16 +26,16 @@ COLUMN_TO_DB = {
     "Уровень": "level_name",
     "Специализация": "specialization",
     "Gmail": "gmail",
-    "Контактная почта": "contact_email",
-    "Git email": "git_email",
-    "GitHub ник": "nick_github",
-    "Портфолио 1": "portfolio_1",
-    "Портфолио 2": "portfolio_2",
-    "Телеграм": "telegram",
+    "Конт. почта": "contact_email",
+    "Git_Email": "git_email",
+    "GitHub_Ник": "nick_github",
+    "Портфолио1": "portfolio_1",
+    "Портфолио2": "portfolio_2",
+    "ТГ": "telegram",
     "Discord": "discord",
     "Страна": "country",
     "Город": "city",
-    "День рождения": "birthday",
+    "ДР": "birthday",
     "CV": "cv",
     "Отклик": "referral_source",
     "Метка": "label",
@@ -54,6 +46,9 @@ COLUMN_TO_DB = {
     "Комментарий": "comment",
     "Проекты": "projects"
 }
+
+# название кнопок для фильтра в настройках поиска (берем назания на русском из COLUMN_TO_DB)
+COLUMNS = [key.split()[0] for key in COLUMN_TO_DB.keys()]
 
 # выбор SQL запроса к БД в меню для локального поиска (поиск по основной БД или по связанным)
 search_conditions = {
