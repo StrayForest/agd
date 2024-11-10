@@ -66,8 +66,10 @@ search_conditions = {
 
 # обработка взаимодействия с кнопками
 async def button(update: Update, context: CallbackContext):
+    projects = get_projects_from_db()
     query = update.callback_query
     await query.answer()
+    print(query.data)
 
     # Проверка текущего уровня меню и обработка кнопок
     if query.data == 'start_search':
@@ -113,7 +115,10 @@ async def button(update: Update, context: CallbackContext):
     elif query.data in search_conditions.keys():
         context.user_data['search_type'] = query.data  # Устанавливаем тип поиска
         await show_search_menu(update, context)  # Обновляем меню с галочкой
-
+    
+    elif query.data in projects:
+        search_type = 'Проект'
+        await handle_text(update, context, search_type)
 # команда старт
 async def start(update: Update, context: CallbackContext):
     context.user_data['menu_level'] = 'start'
@@ -204,15 +209,13 @@ async def show_search_menu(update: Update, context: CallbackContext):
     # Получаем текущий выбранный тип поиска, если он есть
     selected_search_type = context.user_data.get('search_type')
 
-    # Если тип поиска "Проект", то переходим к отображению кнопок с проектами
-
     # Кнопки для выбора типа поиска с добавлением/удалением галочки
     keyboard = []
     for search_type in search_conditions.keys():
         label = search_type
         if selected_search_type == search_type:
             label = f"✅ {search_type}"  # Добавляем галочку для выбранного типа поиска
-        # Если ключ "Проект", проверяем, добавляем ли его с галочкой или без
+        # Если ключ "Проект", создаем кнопку для перехода в выпадющий список проектов
         if search_type == "Проект":
             keyboard.append([InlineKeyboardButton(label, callback_data='show_project_selection_menu')])
         else:
@@ -239,7 +242,7 @@ async def show_search_menu(update: Update, context: CallbackContext):
             reply_markup=reply_markup
         )
 
-# получаем название всех проектов
+# получаем название всех проектов из БД
 def get_projects_from_db():
     # Здесь замените на ваши параметры подключения к базе данных
     connection = psycopg2.connect(**db_params)
@@ -261,13 +264,12 @@ async def show_project_selection_menu(update: Update, context: CallbackContext):
     # Получаем список проектов из базы данных
     projects = get_projects_from_db()
 
-    # Создаем клавиатуру с кнопками для каждого проекта
+    # Создаем клавиатуру с кнопками для каждого проекта списком
     keyboard = [
-        [InlineKeyboardButton(project, callback_data=f"project_{project}")]
+        [InlineKeyboardButton(project, callback_data=project)]
         for project in projects
     ]
 
-    # Добавляем кнопку "Назад"
     keyboard.append([InlineKeyboardButton("Назад", callback_data='start_search')])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -281,16 +283,21 @@ async def show_project_selection_menu(update: Update, context: CallbackContext):
             reply_markup=reply_markup
         )
 
-
 # обработка ввода текста (после выбора типа локального поиска)
-async def handle_text(update: Update, context: CallbackContext):
-    search_type = context.user_data.get('search_type')
+async def handle_text(update: Update, context: CallbackContext, search_type: str = None):
+    # Если search_type не передан, пытаемся взять его из context.user_data
+    search_type = search_type or context.user_data.get('search_type')
+
     if not search_type:
         await update.message.reply_text("Сначала выберите тип поиска с помощью кнопок.")
         return
 
-    # Получаем текст запроса
-    query = update.message.text
+    # Если search_type это "Проект", то мы берем query из данных кнопки (query.data)
+    if search_type == "Проект":
+        query = update.callback_query.data  # query.data содержит название проекта
+    else:
+        query = update.message.text  # Если это не "Проект", то текст все-таки из сообщения пользователя
+
     selected_columns = context.user_data.get('selected_columns', COLUMNS)  # Все столбцы по умолчанию
 
     # Выполняем реальный поиск в базе данных
@@ -307,19 +314,14 @@ async def handle_text(update: Update, context: CallbackContext):
 def search_contact_info(query: str, search_type: str):
     try:
         logging.info(f"Начинаем поиск по запросу: {query} для типа поиска: {search_type}")
-
+        print(f"Начинаем поиск по запросу: {query} для типа поиска: {search_type}")
         # Подключаемся к базе данных
         conn = psycopg2.connect(**db_params)
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
-        # Проверка типа поиска и настройка join
-        if search_type not in search_conditions:
-            logging.error(f"Неверный тип поиска: {search_type}")
-            return "Неверный тип поиска."
-
         search_info = search_conditions[search_type]
 
-        if search_info["join"]:
+        if search_type == 'Проект' or search_type == 'Роль':
             # Если 'join' == True, ищем через JOIN запрос
             if search_type == "Проект":
                 query_string = """
@@ -409,7 +411,7 @@ def search_contact_info(query: str, search_type: str):
                     # Форматируем контакт с добавленными проектами и ролями
                     formatted_result.append(format_contact_data(contact))
 
-            logging.info(f"Форматированные данные: {formatted_result}")
+            logging.info(f"Форматированные данные: {formatted_result}") 
             return formatted_result
         else:
             logging.info("Контакты не найдены.")
@@ -495,9 +497,17 @@ async def send_individual_results(update, result, selected_columns):
 
         # Отправляем каждую часть сообщения
         for part in message_parts:
-            await update.message.reply_text(part)
+            # В случае кнопки используем callback_query
+            if update.callback_query:
+                await update.callback_query.message.reply_text(part)
+            else:
+                await update.message.reply_text(part)
     else:
-        await update.message.reply_text("Контакты не найдены в базе данных.")
+        # Если нет результатов
+        if update.callback_query:
+            await update.callback_query.message.reply_text("Контакты не найдены в базе данных.")
+        else:
+            await update.message.reply_text("Контакты не найдены в базе данных.")
 
 # разделение выдаваемой информации на N сообщений в случае превышаения макс. кол-ва символов
 # информация о сотруднике не разделяется на N сообщений, полная информация о сотруднике всегда будет в одном сообщении целиком
@@ -505,7 +515,7 @@ def split_message(message: str):
     # Разбиваем сообщение на части, если оно слишком длинное, но при этом не разделяем информацию о сотрудниках.
     parts = []
     while len(message) > MAX_MESSAGE_LENGTH:
-        # Найдем ближайшую точку, чтобы не разделить информацию о сотруднике
+        # Найдем ближайшую пунктирную отметку, чтобы не разделить информацию о сотруднике
         split_point = message.rfind("\n-----------------------\n", 0, MAX_MESSAGE_LENGTH)
         if split_point == -1:  # Если не нашли, просто разрезаем по длине
             split_point = MAX_MESSAGE_LENGTH
