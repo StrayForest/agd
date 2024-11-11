@@ -58,6 +58,17 @@ search_conditions = {
     "Проект": {"column": "project", "join": True} #true переводит нажатие кнопки в скрипт для поиска по привязанным таблицам через JOIN запрос
 }
 
+async def set_commands(update, context):
+    bot = context.bot
+
+    # Устанавливаем команды, которые будут отображаться в меню
+    await bot.set_my_commands([
+        ("start", "Начать"),
+        ("info", "Поиск текстом"),
+        ("help", "Инструкция")
+    ])
+    await update.message.reply_text("Команды успешно зарегистрированы!")
+
 # обработка взаимодействия с кнопками
 async def button(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -119,8 +130,6 @@ async def button(update: Update, context: CallbackContext):
 # команда старт
 async def start(update: Update, context: CallbackContext):
     context.user_data['menu_level'] = 'start'
-    projects = get_projects_from_db()
-    context.user_data['projects'] = projects
     # Создаем кнопки "Начать поиск" и "Настройки"
     keyboard = [
         [InlineKeyboardButton("🔍 Начать поиск", callback_data='start_search')],
@@ -511,6 +520,8 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    application.add_handler(CommandHandler("setcommands", set_commands))
 
     # Запускаем бота
     application.run_polling()
