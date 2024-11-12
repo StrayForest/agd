@@ -129,6 +129,10 @@ async def button(update: Update, context: CallbackContext):
 
 # команда старт
 async def start(update: Update, context: CallbackContext):
+    context.user_data['awaiting_start'] = True
+    context.user_data['awaiting_info'] = False  # Убираем флаг info
+    context.user_data['awaiting_help'] = False  # Убираем флаг help
+
     context.user_data['menu_level'] = 'start'
     # Создаем кнопки "Начать поиск" и "Настройки"
     keyboard = [
@@ -146,6 +150,29 @@ async def start(update: Update, context: CallbackContext):
         await update.callback_query.edit_message_text(
             "Добро пожаловать! Пожалуйста, выберите действие:",
             reply_markup=reply_markup
+        )
+
+async def info(update: Update, context: CallbackContext):
+    context.user_data['awaiting_info'] = True
+    context.user_data['awaiting_start'] = False  # Убираем флаг start
+    context.user_data['awaiting_help'] = False  # Убираем флаг help
+    context.user_data['menu_level'] = 'info'
+
+    if update.message:
+        await update.message.reply_text(
+            "Ух, курва",
+        )
+
+async def help(update: Update, context: CallbackContext):
+    context.user_data['awaiting_help'] = True
+    context.user_data['awaiting_start'] = False  # Убираем флаг start
+    context.user_data['awaiting_info'] = False  # Убираем флаг info
+
+    context.user_data['menu_level'] = 'help'
+
+    if update.message:
+        await update.message.reply_text(
+            "Че тычешь???!!",
         )
 
 # меню настроек
@@ -308,30 +335,34 @@ async def show_project_selection_menu(update: Update, context: CallbackContext, 
 
 # обработка ввода текста (после выбора типа локального поиска)
 async def handle_text(update: Update, context: CallbackContext, search_type: str = None):
-    # Если search_type не передан, пытаемся взять его из context.user_data
-    search_type = search_type or context.user_data.get('search_type')
+        
+    if context.user_data.get('awaiting_start', False):
+        # Если search_type не передан, пытаемся взять его из context.user_data
+        search_type = search_type or context.user_data.get('search_type')
 
-    if not search_type:
-        await update.message.reply_text("Сначала выберите тип поиска с помощью кнопок.")
-        return
+        if not search_type:
+            await update.message.reply_text("Сначала выберите тип поиска с помощью кнопок.")
+            return
 
-    # Если search_type это "Проект", то мы берем query из данных кнопки (query.data)
-    if search_type == "Проект":
-        query = update.callback_query.data  # query.data содержит название проекта
-    else:
-        query = update.message.text  # Если это не "Проект", то текст все-таки из сообщения пользователя
+        # Если search_type это "Проект", то мы берем query из данных кнопки (query.data)
+        if search_type == "Проект":
+            query = update.callback_query.data  # query.data содержит название проекта
+        else:
+            query = update.message.text  # Если это не "Проект", то текст все-таки из сообщения пользователя
 
-    selected_columns = context.user_data.get('selected_columns', COLUMNS)  # Все столбцы по умолчанию
+        selected_columns = context.user_data.get('selected_columns', COLUMNS)  # Все столбцы по умолчанию
 
-    # Выполняем реальный поиск в базе данных
-    result = search_contact_info(query, search_type)
+        # Выполняем реальный поиск в базе данных
+        result = search_contact_info(query, search_type)
 
-    # Если были найдены результаты, отправляем их
-    if isinstance(result, list):  # Проверяем, что результат — это список
-        await send_individual_results(update, result, selected_columns)
-    else:
-        # Если возникла ошибка или не найдено, отправляем сообщение об ошибке
-        await update.message.reply_text(result)
+        # Если были найдены результаты, отправляем их
+        if isinstance(result, list):  # Проверяем, что результат — это список
+            await send_individual_results(update, result, selected_columns)
+        else:
+            # Если возникла ошибка или не найдено, отправляем сообщение об ошибке
+            await update.message.reply_text(result)
+            
+    await update.message.reply_text("Сначала выполните одну из команд: /start, /info или /help.")
 
 # поиск информации в БД по запросу
 def search_contact_info(query: str, search_type: str):
@@ -518,6 +549,8 @@ def main():
 
     # Регистрируем обработчики
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("info", info))
+    application.add_handler(CommandHandler("help", help))
     application.add_handler(CallbackQueryHandler(button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
