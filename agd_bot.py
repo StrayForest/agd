@@ -3,7 +3,7 @@ import psycopg2
 import psycopg2.extras 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, filters
-
+import asyncpg
 # максимальная длина сообщения для Telegram (ограничение самого телеграма)
 MAX_MESSAGE_LENGTH = 4096
 
@@ -125,15 +125,14 @@ async def button(update: Update, context: CallbackContext):
 
     elif query.data in context.user_data.get('projects', []):
         search_type = 'Проект'
-        await handle_text(update, context, search_type)
+        await handle_start(update, context, search_type)
 
-# команда старт
+# команды
 async def start(update: Update, context: CallbackContext):
-    context.user_data['awaiting_start'] = True
-    context.user_data['awaiting_info'] = False  # Убираем флаг info
-    context.user_data['awaiting_help'] = False  # Убираем флаг help
-
     context.user_data['menu_level'] = 'start'
+    context.user_data['start'] = True
+    context.user_data['info'] = False
+    context.user_data['help'] = False
     # Создаем кнопки "Начать поиск" и "Настройки"
     keyboard = [
         [InlineKeyboardButton("🔍 Начать поиск", callback_data='start_search')],
@@ -153,10 +152,10 @@ async def start(update: Update, context: CallbackContext):
         )
 
 async def info(update: Update, context: CallbackContext):
-    context.user_data['awaiting_info'] = True
-    context.user_data['awaiting_start'] = False  # Убираем флаг start
-    context.user_data['awaiting_help'] = False  # Убираем флаг help
     context.user_data['menu_level'] = 'info'
+    context.user_data['help'] = False
+    context.user_data['start'] = False
+    context.user_data['info'] = True
 
     if update.message:
         await update.message.reply_text(
@@ -164,11 +163,10 @@ async def info(update: Update, context: CallbackContext):
         )
 
 async def help(update: Update, context: CallbackContext):
-    context.user_data['awaiting_help'] = True
-    context.user_data['awaiting_start'] = False  # Убираем флаг start
-    context.user_data['awaiting_info'] = False  # Убираем флаг info
-
     context.user_data['menu_level'] = 'help'
+    context.user_data['help'] = True
+    context.user_data['start'] = False
+    context.user_data['info'] = False
 
     if update.message:
         await update.message.reply_text(
@@ -333,10 +331,9 @@ async def show_project_selection_menu(update: Update, context: CallbackContext, 
             reply_markup=reply_markup
         )
 
-# обработка ввода текста (после выбора типа локального поиска)
-async def handle_text(update: Update, context: CallbackContext, search_type: str = None):
-        
-    if context.user_data.get('awaiting_start', False):
+# обработка ввода текста (после выбора типа локального поиска от команды /start)
+async def handle_start(update: Update, context: CallbackContext, search_type: str = None):
+    if context.user_data.get('start', False):
         # Если search_type не передан, пытаемся взять его из context.user_data
         search_type = search_type or context.user_data.get('search_type')
 
@@ -344,25 +341,102 @@ async def handle_text(update: Update, context: CallbackContext, search_type: str
             await update.message.reply_text("Сначала выберите тип поиска с помощью кнопок.")
             return
 
-        # Если search_type это "Проект", то мы берем query из данных кнопки (query.data)
+        # Определяем источник данных в зависимости от search_type
         if search_type == "Проект":
             query = update.callback_query.data  # query.data содержит название проекта
         else:
-            query = update.message.text  # Если это не "Проект", то текст все-таки из сообщения пользователя
+            query = update.message.text  # Текст из сообщения пользователя
 
         selected_columns = context.user_data.get('selected_columns', COLUMNS)  # Все столбцы по умолчанию
+
+        print(f"Запрос: {query}")  # Принт для того, что передается как запрос
+        print(f"Выбранные столбцы: {selected_columns}")  # Принт для выбранных столбцов
 
         # Выполняем реальный поиск в базе данных
         result = search_contact_info(query, search_type)
 
-        # Если были найдены результаты, отправляем их
+        # Принт перед отправкой результата
+        print(f"Результат поиска: {result}")
+
+        # Отправляем результаты поиска
         if isinstance(result, list):  # Проверяем, что результат — это список
             await send_individual_results(update, result, selected_columns)
         else:
-            # Если возникла ошибка или не найдено, отправляем сообщение об ошибке
             await update.message.reply_text(result)
+
+    if context.user_data.get('info', False):
+        await handle_info(update, context)
+
+async def handle_info(update: Update, context: CallbackContext):
+    # Получаем и обрабатываем запрос пользователя
+    user_input = update.message.text
+    keywords = [word.strip() for word in user_input.split(",")]
+
+    # Подключаемся к базе данных и выполняем поиск
+    conn = await asyncpg.connect(**db_params)
+    try:
+        # Получаем названия и типы столбцов
+        columns_contacts = await conn.fetch(""" 
+            SELECT column_name, data_type 
+            FROM information_schema.columns 
+            WHERE table_name='contacts'
+        """)
+        
+        # Функция для создания условий поиска по столбцам
+        def get_column_conditions(columns):
+            conditions = []
+            for col in columns:
+                column_name = col['column_name']
+                data_type = col['data_type']
+                # Приведение к строке только для типа даты, иначе простое приведение к тексту
+                if data_type == 'date':
+                    conditions.append(f"TO_CHAR({column_name}, 'YYYY-MM-DD') LIKE $1")
+                else:
+                    conditions.append(f"{column_name}::text LIKE $1")
+            return conditions
+
+        contact_ids = set()
+
+        # Выполняем поиск по каждому ключевому слову
+        for i, keyword in enumerate(keywords):
+            # Поиск по таблице contacts
+            conditions = get_column_conditions(columns_contacts)
+            rows = await conn.fetch(
+                f"SELECT contact_id FROM contacts WHERE {' OR '.join(conditions)}",
+                f"%{keyword}%"
+            )
+
+            if rows:
+                new_ids = {row['contact_id'] for row in rows}
+                contact_ids = new_ids if i == 0 else contact_ids & new_ids
+
+            if not contact_ids:
+                break
+
+        # Формируем и отправляем результат
+        if contact_ids:
+            # Запрашиваем данные сотрудников по найденным ID
+            result = await conn.fetch("SELECT * FROM contacts WHERE contact_id = ANY($1::int[])", list(contact_ids))
             
-    await update.message.reply_text("Сначала выполните одну из команд: /start, /info или /help.")
+            # Получаем выбранные столбцы из контекста пользователя
+            selected_columns = context.user_data.get('selected_columns', COLUMNS)
+            
+            # Форматируем результаты, используя форматирование с русскими названиями столбцов
+            formatted_results = [format_contact_data(contact) for contact in result]
+
+            # Принтим результат, который передается в send_individual_results
+            print(f"Результат, передаваемый в send_individual_results: {formatted_results}")
+            print(f"Выбранные столбцы: {selected_columns}")
+
+            # Отправляем отформатированные результаты с использованием send_individual_results
+            await send_individual_results(update, formatted_results, selected_columns)
+        else:
+            # Сообщение, если сотрудники не найдены
+            await update.message.reply_text("Сотрудники по запросу не найдены.")
+    finally:
+        await conn.close()
+
+
 
 # поиск информации в БД по запросу
 def search_contact_info(query: str, search_type: str):
@@ -479,9 +553,15 @@ def get_contact_data(cursor, contact_id):
 def format_contact_data(contact):
     formatted_contact = {}
     
+    # Проверяем и логируем каждое отображение из COLUMN_TO_DB
     for display_name, db_column in COLUMN_TO_DB.items():
-        # Получаем данные из contact по столбцу db_column и сохраняем их в formatted_contact
-        formatted_contact[display_name] = contact.get(db_column, 'Не указано')
+        # Получаем данные, используя как отображение, так и "чистое" имя столбца
+        value = contact.get(db_column, 'Не указано')
+        formatted_contact[display_name] = value
+        
+        # Подробный лог для отладки
+        logging.info(f"Отображаем '{display_name}' как '{db_column}': значение = '{value}'")
+
     return formatted_contact
 
 # выдача информации о сотрудниках с учетом выдачи выбранной информации в настройках
@@ -489,40 +569,33 @@ async def send_individual_results(update, result, selected_columns):
     if result:
         all_contact_info = ""  # Здесь будем собирать информацию о всех сотрудниках
 
-        # Собираем информацию о каждом сотруднике
         for row in result:
             contact_info = ""
-            # Логируем содержимое строки для отладки
-            logging.info(f"Контактные данные: {row}")
+            logging.info(f"Контактные данные (обработанные): {row}")
 
-            # Проходим по COLUMNS и выводим только те столбцы, которые были выбраны
-            for col in COLUMNS:  # Используем COLUMNS для соблюдения порядка
+            for col in COLUMNS:
+                # Проверяем, какие столбцы приходят, чтобы отладить корректность передачи данных
+                logging.info(f"Текущий столбец: {col}")
+                
                 if col in selected_columns:
-                    # Проверяем, что значение для данного столбца есть
                     value = row.get(col, 'Не указано')
                     contact_info += f"{col}: {value}\n"
+                    logging.info(f"Значение для столбца '{col}': {value}")
 
             contact_info += "-----------------------\n"
-            
-            # Добавляем информацию о текущем сотруднике к общей строке
             all_contact_info += contact_info
 
-        # Теперь делим весь собранный текст на части, учитывая информацию о сотрудниках
+        # Разбиваем весь собранный текст на части и выводим
         message_parts = split_message(all_contact_info)
 
-        # Отправляем каждую часть сообщения
         for part in message_parts:
-            # В случае кнопки используем callback_query
             if update.callback_query:
                 await update.callback_query.message.reply_text(part)
             else:
                 await update.message.reply_text(part)
     else:
-        # Если нет результатов
-        if update.callback_query:
-            await update.callback_query.message.reply_text("Контакты не найдены в базе данных.")
-        else:
-            await update.message.reply_text("Контакты не найдены в базе данных.")
+        no_contact_msg = "Контакты не найдены в базе данных."
+        await (update.callback_query.message.reply_text(no_contact_msg) if update.callback_query else update.message.reply_text(no_contact_msg))
 
 # разделение выдаваемой информации на N сообщений в случае превышаения макс. кол-ва символов
 # информация о сотруднике не разделяется на N сообщений, полная информация о сотруднике всегда будет в одном сообщении целиком
@@ -552,7 +625,7 @@ def main():
     application.add_handler(CommandHandler("info", info))
     application.add_handler(CommandHandler("help", help))
     application.add_handler(CallbackQueryHandler(button))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_start))
 
     application.add_handler(CommandHandler("setcommands", set_commands))
 
