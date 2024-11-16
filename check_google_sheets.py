@@ -132,7 +132,12 @@ def update_database(headers, data):
             if contact:
                 contact_id = contact[0]
                 update_fields, values = build_update_fields(row_data, header_to_db, contact_id)
-                
+                # Обработка пустых значений: если значение пустое, меняем на NULL
+                for i in range(len(update_fields)):
+                    if values[i] is None or values[i] == '':
+                        update_fields[i] = f"{update_fields[i]} = NULL"
+                        values[i] = None  # Устанавливаем значение в None, чтобы обновить на NULL
+
                 if update_fields:
                     update_query = f"UPDATE contacts SET {', '.join(update_fields)} WHERE contact_id = %s"
                     cursor.execute(update_query, values)
@@ -146,6 +151,7 @@ def update_database(headers, data):
             else:
                 contact_id = insert_contact(cursor, row_data, header_to_db)
                 logging.info(f"Добавлена новая запись для {name} ({telegram}).")
+
 
             # Обработка проектов
             handle_projects(cursor, row_data.get("Проекты"), contact_id)
@@ -164,22 +170,20 @@ def build_update_fields(row_data, header_to_db, contact_id):
     update_fields = []
     values = []
 
-    # Проходим по всем полям и собираем их для обновления
-    for header, db_column in header_to_db.items():
-        value = row_data.get(header)
+    for key, db_column in header_to_db.items():
+        if key not in ['Проекты', 'Роль']:  # Исключаем обработку проектов и роли
+            value = row_data.get(key)
+            value = process_value(value, key)
 
-        # Если значение пустое, передаем NULL
-        if value == '' or value is None:
-            update_fields.append(f"{db_column} = %s")
-            values.append(None)  # Это значение будет NULL в базе данных
-        else:
+            # Если значение None или пустая строка, заменяем на None
+            if value == '' or value is None:
+                value = None  # Преобразуем в None, чтобы в SQL было NULL
+
+            # Добавляем значение в values, даже если это None (будет обработано как NULL)
             update_fields.append(f"{db_column} = %s")
             values.append(value)
 
-    # Обязательно добавляем contact_id в параметры для WHERE-условия
-    update_fields.append("contact_id = %s")
-    values.append(contact_id)
-
+    values.append(contact_id)  # Добавляем ID контакта в конец
     return update_fields, values
 
 
