@@ -105,10 +105,14 @@ def update_database(headers, data):
     """
     Синхронизация данных из Google Sheets с базой данных MySQL.
     """
+    # Устанавливаем соединение с базой данных
     connection = mysql.connector.connect(**mysql_config)
     cursor = connection.cursor()
 
     try:
+        # Начинаем транзакцию
+        connection.start_transaction()
+
         # Создаем сопоставление заголовков Google Sheets и колонок БД
         header_to_db = {header: COLUMN_TO_DB.get(header) for header in headers if header in COLUMN_TO_DB}
 
@@ -151,9 +155,8 @@ def update_database(headers, data):
                 processed_contact_ids.add(contact_id)  # Добавляем контакт в обработанные
                 logging.info(f"Добавлена новая запись для {name} ({telegram}).")
 
-            # Обработка проектов
+            # Обработка проектов и роли
             handle_projects(cursor, row_data.get("Проекты"), contact_id)
-            # Обработка роли
             handle_role(cursor, row_data.get("Роль"), contact_id)
 
         # Теперь находим и удаляем все контакты, которых нет в обработанных
@@ -169,10 +172,13 @@ def update_database(headers, data):
                 cursor.execute("DELETE FROM contacts WHERE contact_id = %s", (contact_id,))
                 logging.info(f"Удален контакт с id {contact_id} и его связанные данные.")
 
+        # Подтверждаем все изменения в базе данных
         connection.commit()
 
     except Exception as e:
         logging.error(f"Ошибка обновления базы данных: {e}")
+        # В случае ошибки откатываем транзакцию
+        connection.rollback()
     finally:
         cursor.close()
         connection.close()
