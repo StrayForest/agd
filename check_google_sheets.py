@@ -7,14 +7,7 @@ from google.oauth2.service_account import Credentials
 from time import sleep
 from datetime import datetime
 
-# Конфигурация MySQL
-mysql_config = {
-    'user': 'root',  # Укажите вашего пользователя
-    'password': '1234',  # Укажите пароль от базы
-    'host': 'localhost',  # Если база данных находится на другом сервере, укажите его IP
-    'database': 'agd_db',  # Название вашей базы данных
-    'charset': 'utf8mb4'  # Убедитесь, что используете корректную кодировку
-}
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 # Конфигурация Google Sheets API
 CLIENT_SECRET_FILE = 'client_secret_942918625771-ph4vdshpi35sk5p8odesjbmj5odkkdjc.apps.googleusercontent.com.json'
@@ -23,6 +16,15 @@ API_VERSION = 'v4'
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 SPREADSHEET_ID = '1PWkcDqLb76QxhdNB-70CTHCODvR4U3kk1pLYsBuCeqA'
 SHEET_NAME = 'БД'  # Укажите точное название листа, откуда хотите брать данные
+
+# Конфигурация MySQL
+mysql_config = {
+    'user': 'root',  # Укажите вашего пользователя
+    'password': '1234',  # Укажите пароль от базы
+    'host': 'localhost',  # Если база данных находится на другом сервере, укажите его IP
+    'database': 'agd_db',  # Название вашей базы данных
+    'charset': 'utf8mb4'  # Убедитесь, что используете корректную кодировку
+}
 
 # Соответствие между столбцами Google Sheets и базой данных
 COLUMN_TO_DB = {
@@ -54,9 +56,16 @@ COLUMN_TO_DB = {
     "Проекты": "projects"
 }
 
-# Логирование
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+# Функция авторизации через OAuth 2.0
+def authenticate_oauth():
+    """
+    Функция для авторизации через OAuth 2.0.
+    """
+    flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
+    creds = flow.run_local_server(port=8080)  # Запуск локального сервера для авторизации
+    return creds
 
+# подгоняем дату под нужный формат
 def convert_date_format(birthday):
     try:
         # Преобразуем строку с датой в объект datetime
@@ -70,16 +79,7 @@ def convert_date_format(birthday):
         logging.error(f"Ошибка преобразования даты: {birthday} - {e}")
         return None
 
-# Функция авторизации через OAuth 2.0
-def authenticate_oauth():
-    """
-    Функция для авторизации через OAuth 2.0.
-    """
-    flow = InstalledAppFlow.from_client_secrets_file(CLIENT_SECRET_FILE, SCOPES)
-    creds = flow.run_local_server(port=8080)  # Запуск локального сервера для авторизации
-    return creds
-
-# Функция подключения к Google Sheets
+# Подключение к Google Sheets
 def get_google_sheet_data():
     """
     Авторизация через сервисный аккаунт или OAuth 2.0 и извлечение данных из Google Sheets.
@@ -100,7 +100,7 @@ def get_google_sheet_data():
     logging.info(f"Получены данные из Google Sheets: {len(data)} строк.")
     return headers, data
 
-# Функция для обновления базы данных
+# Сихронизации google sheets и БД
 def update_database(headers, data):
     """
     Синхронизация данных из Google Sheets с базой данных MySQL.
@@ -111,6 +111,9 @@ def update_database(headers, data):
     try:
         # Создаем сопоставление заголовков Google Sheets и колонок БД
         header_to_db = {header: COLUMN_TO_DB.get(header) for header in headers if header in COLUMN_TO_DB}
+
+        # Список обработанных contact_id
+        processed_contact_ids = set()
 
         for row in data:
             row_data = dict(zip(headers, row))
@@ -131,6 +134,7 @@ def update_database(headers, data):
 
             if contact:
                 contact_id = contact[0]
+                processed_contact_ids.add(contact_id)  # Добавляем контакт в обработанные
                 update_fields, values = build_update_fields(row_data, header_to_db, contact_id)
                 # Обработка пустых значений: если значение пустое, меняем на NULL
                 for i in range(len(update_fields)):
@@ -142,21 +146,28 @@ def update_database(headers, data):
                     update_query = f"UPDATE contacts SET {', '.join(update_fields)} WHERE contact_id = %s"
                     cursor.execute(update_query, values)
                     logging.info(f"Обновлена запись для {name} ({telegram}).")
-
-                # Если все поля пустые, можно удалить контакт
-                if all(value is None or value == '' for value in row_data.values()):
-                    cursor.execute("DELETE FROM contacts WHERE contact_id = %s", (contact_id,))
-                    logging.info(f"Запись для {name} ({telegram}) удалена, так как все значения пустые.")
-
             else:
                 contact_id = insert_contact(cursor, row_data, header_to_db)
+                processed_contact_ids.add(contact_id)  # Добавляем контакт в обработанные
                 logging.info(f"Добавлена новая запись для {name} ({telegram}).")
-
 
             # Обработка проектов
             handle_projects(cursor, row_data.get("Проекты"), contact_id)
             # Обработка роли
             handle_role(cursor, row_data.get("Роль"), contact_id)
+
+        # Теперь находим и удаляем все контакты, которых нет в обработанных
+        cursor.execute("SELECT contact_id FROM contacts")
+        all_contacts = cursor.fetchall()
+
+        for contact in all_contacts:
+            contact_id = contact[0]
+            if contact_id not in processed_contact_ids:
+                # Удаляем записи из связанных таблиц
+                delete_related_data(cursor, contact_id)
+                # Удаляем контакт
+                cursor.execute("DELETE FROM contacts WHERE contact_id = %s", (contact_id,))
+                logging.info(f"Удален контакт с id {contact_id} и его связанные данные.")
 
         connection.commit()
 
@@ -166,6 +177,21 @@ def update_database(headers, data):
         cursor.close()
         connection.close()
 
+# Удаление контакта, если он удалет из гугл таблиц
+def delete_related_data(cursor, contact_id):
+    """
+    Удаляем все данные, связанные с данным контактным ID из других таблиц.
+    """
+    try:
+        # Удаляем связь с проектами
+        cursor.execute("DELETE FROM contact_projects WHERE contact_id = %s", (contact_id,))
+        # Удаляем связь с ролями
+        cursor.execute("DELETE FROM contact_job_position WHERE contact_id = %s", (contact_id,))
+        logging.info(f"Удалены все связанные данные для contact_id {contact_id}.")
+    except Exception as e:
+        logging.error(f"Ошибка при удалении связанных данных для contact_id {contact_id}: {e}")
+
+# Строит список полей для обновления в SQL-запросе
 def build_update_fields(row_data, header_to_db, contact_id):
     update_fields = []
     values = []
@@ -186,7 +212,7 @@ def build_update_fields(row_data, header_to_db, contact_id):
     values.append(contact_id)  # Добавляем ID контакта в конец
     return update_fields, values
 
-
+# Вставляет новый контакт в базу данных
 def insert_contact(cursor, row_data, header_to_db):
     columns = []
     placeholders = []
@@ -215,6 +241,7 @@ def process_value(value, key):
         return convert_date_format(value) if value else None
     return value
 
+# отдельно собираем и добавляем проекты в связующую таблицу
 def handle_projects(cursor, projects, contact_id):
     if projects:
         project_list = projects.splitlines()
@@ -246,7 +273,7 @@ def handle_projects(cursor, projects, contact_id):
                     logging.error(f"Ошибка при обработке проекта '{project_name}' для contact_id {contact_id}: {e}")
                 finally:
                     cursor.nextset()  # Завершаем обработку набора результатов
-
+# отдельно собираем и добавляем роли в связующую таблицу
 def handle_role(cursor, role, contact_id):
     if role:
         try:
