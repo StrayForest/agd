@@ -3,17 +3,17 @@ import psycopg2
 import psycopg2.extras 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, CallbackContext, MessageHandler, filters
-import asyncpg
+import mysql.connector
+
 # максимальная длина сообщения для Telegram (ограничение самого телеграма)
 MAX_MESSAGE_LENGTH = 4096
 
 # подключение к БД
 db_params = {
-    'host': 'localhost',
-    'port': '5432',
-    'database': 'agd_db',
-    'user': 'postgres',
-    'password': '1488'
+    'user': 'root',
+    'password': '1234',
+    'host': 'localhost',  # или другой хост, если удаленный
+    'database': 'agd_db'
 }
 
 # ключи кнопок фильтра для поиску по БД (колонки в БД называются иначе)
@@ -53,7 +53,7 @@ COLUMNS = [key.split()[0] for key in COLUMN_TO_DB.keys()]
 search_conditions = {
     "ФИО": {"column": "name", "join": False},
     "Роль": {"column": "job_position_name", "join": True},
-    "Отдел": {"column": "direction", "join": False},
+    "Направление": {"column": "direction", "join": False},
     "Телеграм": {"column": "telegram", "join": False},
     "Проект": {"column": "project", "join": True} #true переводит нажатие кнопки в скрипт для поиска по привязанным таблицам через JOIN запрос
 }
@@ -64,7 +64,6 @@ async def set_commands(update, context):
     # Устанавливаем команды, которые будут отображаться в меню
     await bot.set_my_commands([
         ("start", "Начать"),
-        ("info", "Поиск текстом"),
         ("help", "Инструкция")
     ])
     await update.message.reply_text("Команды успешно зарегистрированы!")
@@ -73,7 +72,6 @@ async def set_commands(update, context):
 async def button(update: Update, context: CallbackContext):
     query = update.callback_query
     await query.answer()
-    print(query.data)
 
     actions = {
         'start_search': (show_search_menu, 'search_menu'),
@@ -131,7 +129,6 @@ async def button(update: Update, context: CallbackContext):
 async def start(update: Update, context: CallbackContext):
     context.user_data['menu_level'] = 'start'
     context.user_data['start'] = True
-    context.user_data['info'] = False
     context.user_data['help'] = False
     # Создаем кнопки "Начать поиск" и "Настройки"
     keyboard = [
@@ -151,26 +148,25 @@ async def start(update: Update, context: CallbackContext):
             reply_markup=reply_markup
         )
 
-async def info(update: Update, context: CallbackContext):
-    context.user_data['menu_level'] = 'info'
-    context.user_data['help'] = False
-    context.user_data['start'] = False
-    context.user_data['info'] = True
-
-    if update.message:
-        await update.message.reply_text(
-            "Ух, курва",
-        )
-
 async def help(update: Update, context: CallbackContext):
     context.user_data['menu_level'] = 'help'
     context.user_data['help'] = True
     context.user_data['start'] = False
-    context.user_data['info'] = False
 
     if update.message:
         await update.message.reply_text(
-            "Че тычешь???!!",
+            "👋 <b>Привет</b>, я AGD - бот.\n\n"
+            "Здесь ты сможешь найти информацию о сотрудниках 👨‍💻\n\n"
+            "Для начала поиска выбери команду <b>/start</b>\n\n"
+            "После этого нажми на ⚙️ <b>Настройки</b> -> <b>Фильтр выдачи</b>.\n"
+            "Там будет возможность выбрать, какую информацию хочешь получить.\n\n"
+            "Можно выбрать <b>все</b> столбцы или <b>несколько</b>.\n"
+            "Обязательно нажми <b>Сохранить!</b> 💾\n\n"
+            "Затем вернить и нажми 🔍 <b>Начать поиск</b>.\n\n"
+            "Сдесь выбираешь, через что хочешь найти сотрудника.\n\n"
+            "Например, если выбрать <b>ФИО</b> и ввести <b>Никита</b>, то выдаст <b>всех Никит</b>.\n\n"
+            "Нажав на <b>Проект</b>, появится список проектов для поиска, что позволяет не прописывать название проекта вручную.",
+            parse_mode='HTML'
         )
 
 # меню настроек
@@ -284,8 +280,8 @@ async def show_search_menu(update: Update, context: CallbackContext):
 def get_projects_from_db():
     try:
         # Подключение к базе данных
-        with psycopg2.connect(**db_params) as connection:
-            with connection.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        with mysql.connector.connect(**db_params) as connection:
+            with connection.cursor(dictionary=True) as cursor:
                 # Получаем все проекты из таблицы projects
                 cursor.execute("SELECT project_name FROM projects")
                 projects = cursor.fetchall()
@@ -345,18 +341,12 @@ async def handle_start(update: Update, context: CallbackContext, search_type: st
         if search_type == "Проект":
             query = update.callback_query.data  # query.data содержит название проекта
         else:
-            query = update.message.text  # Текст из сообщения пользователя
+            query = update.message.text.lower() # Текст из сообщения пользователя
 
         selected_columns = context.user_data.get('selected_columns', COLUMNS)  # Все столбцы по умолчанию
 
-        print(f"Запрос: {query}")  # Принт для того, что передается как запрос
-        print(f"Выбранные столбцы: {selected_columns}")  # Принт для выбранных столбцов
-
         # Выполняем реальный поиск в базе данных
         result = search_contact_info(query, search_type)
-
-        # Принт перед отправкой результата
-        print(f"Результат поиска: {result}")
 
         # Отправляем результаты поиска
         if isinstance(result, list):  # Проверяем, что результат — это список
@@ -364,88 +354,14 @@ async def handle_start(update: Update, context: CallbackContext, search_type: st
         else:
             await update.message.reply_text(result)
 
-    if context.user_data.get('info', False):
-        await handle_info(update, context)
-
-async def handle_info(update: Update, context: CallbackContext):
-    # Получаем и обрабатываем запрос пользователя
-    user_input = update.message.text
-    keywords = [word.strip() for word in user_input.split(",")]
-
-    # Подключаемся к базе данных и выполняем поиск
-    conn = await asyncpg.connect(**db_params)
-    try:
-        # Получаем названия и типы столбцов
-        columns_contacts = await conn.fetch(""" 
-            SELECT column_name, data_type 
-            FROM information_schema.columns 
-            WHERE table_name='contacts'
-        """)
-        
-        # Функция для создания условий поиска по столбцам
-        def get_column_conditions(columns):
-            conditions = []
-            for col in columns:
-                column_name = col['column_name']
-                data_type = col['data_type']
-                # Приведение к строке только для типа даты, иначе простое приведение к тексту
-                if data_type == 'date':
-                    conditions.append(f"TO_CHAR({column_name}, 'YYYY-MM-DD') LIKE $1")
-                else:
-                    conditions.append(f"{column_name}::text LIKE $1")
-            return conditions
-
-        contact_ids = set()
-
-        # Выполняем поиск по каждому ключевому слову
-        for i, keyword in enumerate(keywords):
-            # Поиск по таблице contacts
-            conditions = get_column_conditions(columns_contacts)
-            rows = await conn.fetch(
-                f"SELECT contact_id FROM contacts WHERE {' OR '.join(conditions)}",
-                f"%{keyword}%"
-            )
-
-            if rows:
-                new_ids = {row['contact_id'] for row in rows}
-                contact_ids = new_ids if i == 0 else contact_ids & new_ids
-
-            if not contact_ids:
-                break
-
-        # Формируем и отправляем результат
-        if contact_ids:
-            # Запрашиваем данные сотрудников по найденным ID
-            result = await conn.fetch("SELECT * FROM contacts WHERE contact_id = ANY($1::int[])", list(contact_ids))
-            
-            # Получаем выбранные столбцы из контекста пользователя
-            selected_columns = context.user_data.get('selected_columns', COLUMNS)
-            
-            # Форматируем результаты, используя форматирование с русскими названиями столбцов
-            formatted_results = [format_contact_data(contact) for contact in result]
-
-            # Принтим результат, который передается в send_individual_results
-            print(f"Результат, передаваемый в send_individual_results: {formatted_results}")
-            print(f"Выбранные столбцы: {selected_columns}")
-
-            # Отправляем отформатированные результаты с использованием send_individual_results
-            await send_individual_results(update, formatted_results, selected_columns)
-        else:
-            # Сообщение, если сотрудники не найдены
-            await update.message.reply_text("Сотрудники по запросу не найдены.")
-    finally:
-        await conn.close()
-
-
-
 # поиск информации в БД по запросу
 def search_contact_info(query: str, search_type: str):
     try:
         logging.info(f"Начинаем поиск по запросу: {query} для типа поиска: {search_type}")
         
         # Подключаемся к базе данных с использованием контекстного менеджера
-        with psycopg2.connect(**db_params) as conn:
-            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cursor:
+        with mysql.connector.connect(**db_params) as conn:
+            with conn.cursor(dictionary=True) as cursor:
 
                 search_info = search_conditions.get(search_type)
                 if not search_info:
@@ -497,7 +413,7 @@ def build_join_query(search_type, query):
             LEFT JOIN projects p ON cp.project_id = p.project_id
             LEFT JOIN contact_job_position cjp ON c.contact_id = cjp.contact_id
             LEFT JOIN job_position jp ON cjp.job_position_name = jp.job_position_name
-            WHERE p.project_name ILIKE %s
+            WHERE LOWER(p.project_name) LIKE %s
         """
     elif search_type == "Роль":
         query_string = """
@@ -505,14 +421,14 @@ def build_join_query(search_type, query):
             FROM contacts c
             LEFT JOIN contact_job_position cjp ON c.contact_id = cjp.contact_id
             LEFT JOIN job_position jp ON cjp.job_position_name = jp.job_position_name
-            WHERE jp.job_position_name ILIKE %s
+            WHERE LOWER(jp.job_position_name) LIKE %
         """
-    like_query = f"%{query.strip()}%"
+    like_query = f"%{query.strip().lower()}%"
     return query_string, like_query
 # вспомогательная для def search_contact_info
 def build_simple_query(column_name, query):
-    query_string = f"SELECT contact_id FROM contacts WHERE {column_name} ILIKE %s"
-    like_query = f"%{query.strip()}%"
+    query_string = f"SELECT contact_id FROM contacts WHERE LOWER({column_name}) LIKE LOWER(%s)"
+    like_query = f"%{query.strip().lower()}%"
     return query_string, like_query
 # вспомогательная для def search_contact_info
 def get_contact_data(cursor, contact_id):
@@ -622,7 +538,6 @@ def main():
 
     # Регистрируем обработчики
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("info", info))
     application.add_handler(CommandHandler("help", help))
     application.add_handler(CallbackQueryHandler(button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_start))
