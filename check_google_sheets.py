@@ -1,10 +1,7 @@
-import os
 import mysql.connector
 import logging
 from google_auth_oauthlib.flow import InstalledAppFlow  # Для OAuth 2.0
 from googleapiclient.discovery import build
-from google.oauth2.service_account import Credentials
-from time import sleep
 from datetime import datetime
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
@@ -70,10 +67,8 @@ def convert_date_format(birthday):
     try:
         # Преобразуем строку с датой в объект datetime
         birthday_date = datetime.strptime(birthday, "%d.%m.%Y")  # Ожидаемый формат ввода: 'DD.MM.YYYY'
-        print(f'Преобразованная дата: {birthday_date}')  # Выводим объект datetime для проверки
         # Преобразуем объект datetime в строку формата 'YYYY-MM-DD', только дата без времени
         formatted_date = birthday_date.strftime("%Y-%m-%d")
-        print(f'Отформатированная дата: {formatted_date}')  # Выводим отформатированную дату для проверки
         return formatted_date
     except Exception as e:
         logging.error(f"Ошибка преобразования даты: {birthday} - {e}")
