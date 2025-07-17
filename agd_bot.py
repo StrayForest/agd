@@ -15,10 +15,10 @@ MAX_MESSAGE_LENGTH = 4096
 
 # подключение к БД
 db_params = {
-    'user': 'root',
-    'password': '1234',
-    'host': 'localhost',  # или другой хост, если удаленный
-    'database': 'agd_db'
+    'user': '',
+    'password': '',
+    'host': '',  # или другой хост, если удаленный
+    'database': ''
 }
 
 # ключи кнопок фильтра для поиску по БД (колонки в БД называются иначе)
@@ -714,7 +714,7 @@ def split_message(message: str):
 # запуск бота
 def main():
     # Указываем токен вашего бота
-    bot_token = '7965334033:AAG51HpKRBK8RmzYBCgqg-Mj7PMPijNL1WM'
+    bot_token = ''
 
     # Создаем приложение Telegram
     application = Application.builder().token(bot_token).build()
