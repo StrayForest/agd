@@ -7,20 +7,20 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 
 # Конфигурация Google Sheets API
-CLIENT_SECRET_FILE = 'client_secret_942918625771-ph4vdshpi35sk5p8odesjbmj5odkkdjc.apps.googleusercontent.com.json'
-API_NAME = 'sheets'
-API_VERSION = 'v4'
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-SPREADSHEET_ID = '1PWkcDqLb76QxhdNB-70CTHCODvR4U3kk1pLYsBuCeqA'
-SHEET_NAME = 'БД'  # Укажите точное название листа, откуда хотите брать данные
+CLIENT_SECRET_FILE = ''
+API_NAME = ''
+API_VERSION = ''
+SCOPES = ['']
+SPREADSHEET_ID = ''
+SHEET_NAME = ''  # Укажите точное название листа, откуда хотите брать данные
 
 # Конфигурация MySQL
 mysql_config = {
-    'user': 'root',  # Укажите вашего пользователя
-    'password': '1234',  # Укажите пароль от базы
-    'host': 'localhost',  # Если база данных находится на другом сервере, укажите его IP
-    'database': 'agd_db',  # Название вашей базы данных
-    'charset': 'utf8mb4'  # Убедитесь, что используете корректную кодировку
+    'user': '',  # Укажите вашего пользователя
+    'password': '',  # Укажите пароль от базы
+    'host': '',  # Если база данных находится на другом сервере, укажите его IP
+    'database': '',  # Название вашей базы данных
+    'charset': ''  # Убедитесь, что используете корректную кодировку
 }
 
 # Соответствие между столбцами Google Sheets и базой данных
